@@ -1,6 +1,5 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards            #-}
-{-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TemplateHaskell            #-}
 
 module System.Hurtle
@@ -141,16 +140,14 @@ llFindRequest cid = do
         Nothing -> return Nothing
         Just sr -> Just sr <$ put (st & llInFlight %~ Hash.delete cid)
 
-runHurtle :: forall st t i a.
-             Config st t             -- ^ Configuration
+runHurtle :: Config st t             -- ^ Configuration
           -> (i -> Request t i a)    -- ^ Action for each input
           -> (String -> IO ())       -- ^ Error log action
           -> (st -> a -> IO ())      -- ^ Final action for each input
           -> IO (i -> IO (), IO ())  -- ^ Provide an enqueue and a wait action.
 runHurtle cfg hl = runLL cfg (runRequest hl)
 
-runLL :: forall st t a b.
-         Config st t                -- ^ Configuration
+runLL :: Config st t                -- ^ Configuration
       -> (a -> LL st t a b)         -- ^ Action for each input
       -> (String -> IO ())          -- ^ Error log action
       -> (st -> b -> IO ())         -- ^ Final action for each input
@@ -162,13 +159,10 @@ runLL Config{..} ll logError finish = do
     begun <- STM.atomically newFlagPost
 
     let -- Compute another stage and send out the next request or finish.
-        enqueue :: a -> IO ()
         enqueue x = withStateV stateV "runLL.enqueue" (Nothing :: Maybe ()) $ do
             cid <- llEnqueue x
             lift $ Log.debugM "runLL.enqueue" $ "enqueued " ++ show cid
 
-        doStep :: String -> CallId -> LL st t a b
-               -> StateT (LLState st t a b) IO ()
         doStep category cid (LL (FreeT m)) = do
             (resp, enqs) <- runWriterT (hoist lift m)
             cids <- mapM llEnqueue enqs
@@ -226,8 +220,7 @@ runLL Config{..} ll logError finish = do
                 lift $ Log.criticalM category msg
         Conc.yield
 
-    let wait :: IO ()
-        wait = do
+    let wait = do
             Log.debugM "runLL.wait" "waiting..."
             STM.atomically $ do
                 waitFlagPost begun
