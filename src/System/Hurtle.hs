@@ -100,6 +100,12 @@ data Queued a = Queued CallId a
 
 data SomeRequest st t e i a = SR (t -> LL st t e i a) t
 
+someRequestCont :: Lens' (SomeRequest st t e i a) (t -> LL st t e i a)
+someRequestCont = lens (\(SR kont _) -> kont) (\(SR _ t) kont -> SR kont t)
+
+someRequestValue :: Lens' (SomeRequest st t e i a) t
+someRequestValue = lens (\(SR _ t) -> t) (\(SR kont _) t -> SR kont t)
+
 data LLF st t e a
     = LLF t (t -> a)
     | Throw e
@@ -211,6 +217,9 @@ runLL Config{..} ll logIt finish = do
     -- Receive a reply and run the next step of a chain.
     receiver <- Async.async . forever $ do
         let category = "runLL.receiver"
+            onRequest cid reqM = case reqM of
+                Nothing -> lift $ errorL category "request handler not found!"
+                Just (SR kont t) -> doStep category cid (kont t)
         st <- STM.atomically $ do
             waitFlagPost begun
             state <- STM.readTMVar stateV
@@ -222,20 +231,11 @@ runLL Config{..} ll logIt finish = do
         withSt category Nothing $ case resp of
             Ok cid t -> do
                 reqM <- llFindRequest cid
-                case reqM of
-                    Nothing ->
-                        lift $ errorL category "request handler not found!"
-                    Just (SR kont _) ->
-                        doStep category cid (kont t)
+                onRequest cid ((someRequestValue .~ t) <$> reqM)
             Retry cid stM -> do
                 lift $ warningL category ("retrying " ++ show cid)
                 mapM_ (llState .=) stM
-                reqM <- llFindRequest cid
-                case reqM of
-                    Nothing ->
-                        lift $ errorL category "request handler not found!"
-                    Just (SR kont t) ->
-                        doStep category cid (kont t)
+                llFindRequest cid >>= onRequest cid
             LogError msg ->
                 -- TODO: what else??
                 lift $ errorL category msg
