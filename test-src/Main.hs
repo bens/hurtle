@@ -52,15 +52,13 @@ main = do
             when (x == 1) $
                 request 0
             return x
+        doneHandler _ x = Log.infoM "main" $ "result was " ++ show x
         logHandler (LogMessage lvl section msg) = case lvl of
             Debug   -> Log.debugM section msg
             Info    -> Log.infoM section msg
             Warning -> Log.warningM section msg
             Error   -> Log.errorM section msg
 
-    (enq, wait) <- runHurtle testConfig f logHandler $ \_ x ->
-        Log.infoM "main" (show x)
-    enq 5
-    wait
+    runHurtle testConfig f [5] doneHandler logHandler
     Conc.threadDelay (10^(5::Int))
     Log.infoM "main" "DONE"

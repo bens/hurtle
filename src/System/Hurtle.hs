@@ -22,7 +22,7 @@ import           Control.Monad.Morph        (hoist, lift)
 import           Control.Monad.Trans.Free
 import           Control.Monad.Trans.State  hiding (state)
 import           Control.Monad.Trans.Writer
-import           Data.Foldable              (mapM_)
+import           Data.Foldable              (forM_, mapM_)
 import           Data.Hashable              (Hashable)
 import qualified Data.HashMap.Strict        as Hash
 import           Data.Sequence              (ViewR (..), (<|))
@@ -164,18 +164,20 @@ llFindRequest cid = do
 runHurtle :: Show e
           => Config st t             -- ^ Configuration
           -> (i -> Request t e i a)  -- ^ Action for each input
-          -> (LogMessage -> IO ())   -- ^ Log handler
+          -> [i]                     -- ^ Initial values to enqueue
           -> (st -> a -> IO ())      -- ^ Final action for each input
-          -> IO (i -> IO (), IO ())  -- ^ Provide an enqueue and a wait action.
+          -> (LogMessage -> IO ())   -- ^ Log handler
+          -> IO ()
 runHurtle cfg hl = runLL cfg (runRequest hl)
 
 runLL :: Show e
       => Config st t                -- ^ Configuration
       -> (i -> LL st t e i a)       -- ^ Action for each input
-      -> (LogMessage -> IO ())      -- ^ Log handler
+      -> [i]                        -- ^ Initial values to enqueue
       -> (st -> a -> IO ())         -- ^ Final action for each input
-      -> IO (i -> IO (), IO ())     -- ^ Provide an enqueue and a wait action.
-runLL Config{..} ll logIt finish = do
+      -> (LogMessage -> IO ())      -- ^ Log handler
+      -> IO ()
+runLL Config{..} ll xs finish logIt = do
     initialState <- configInit
     stateV <- STM.atomically $
         STM.newTMVar (LLState 0 initialState Seq.empty Hash.empty)
@@ -188,12 +190,12 @@ runLL Config{..} ll logIt finish = do
         warningL = (logIt .) . LogMessage Warning
         errorL   = (logIt .) . LogMessage Error
 
-        -- Compute another stage and send out the next request or finish.
-        enqueue x = withSt "runLL.enqueue" Nothing $ do
+    withSt "runLL.enqueue" Nothing $
+        forM_ xs $ \x -> do
             cid <- llEnqueue x
-            lift . debugL "runLL.enqueue" $ "enqueued " ++ show cid
+            lift . debugL "runLL.enqueue" $ "enqueued " ++ show [cid]
 
-        doStep category cid (LL (FreeT m)) = do
+    let doStep category cid (LL (FreeT m)) = do
             (resp, enqs) <- runWriterT (hoist lift m)
             cids <- mapM llEnqueue enqs
             lift $ debugL category $ "enqueued " ++ show cids
@@ -259,20 +261,17 @@ runLL Config{..} ll logIt finish = do
                 when continue $
                     Conc.yield >> loop
 
-    let wait = do
-            debugL "runLL.wait" "waiting..."
-            STM.atomically $ do
-                waitFlagPost begun
-                state <- STM.readTMVar stateV
-                guard (Seq.null  (state ^. llQueue))
-                guard (Hash.null (state ^. llInFlight))
-                flagPost done
-            debugL "runLL.wait" "stopping threads"
-            mapM_ Async.wait [sender, receiver]
-            infoL "runLL.wait" "finished"
-
     mapM_ Async.link [sender, receiver]
-    return (enqueue, wait)
+    debugL "runLL" "waiting..."
+    STM.atomically $ do
+        waitFlagPost begun
+        state <- STM.readTMVar stateV
+        guard (Seq.null  (state ^. llQueue))
+        guard (Hash.null (state ^. llInFlight))
+        flagPost done
+    debugL "runLL" "stopping threads"
+    mapM_ Async.wait [sender, receiver]
+    infoL "runLL" "finished"
 
 
 --
