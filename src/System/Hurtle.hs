@@ -23,7 +23,7 @@ import           Control.Monad.Trans.State  hiding (state)
 import           Control.Monad.Trans.Writer
 import           Data.Foldable              (mapM_)
 import           Data.Hashable              (Hashable)
-import qualified Data.HashMap.Strict        as HM
+import qualified Data.HashMap.Strict        as Hash
 import           Data.Sequence              (ViewR (..), (<|))
 import qualified Data.Sequence              as Seq
 import qualified System.Log.Logger          as Log
@@ -100,7 +100,7 @@ data LLState st t a b = LLState
     { _llNextId   :: Integer
     , _llState    :: st
     , _llQueue    :: Seq.Seq (Queued a)
-    , _llInFlight :: HM.HashMap CallId (SomeRequest st t a b)
+    , _llInFlight :: Hash.HashMap CallId (SomeRequest st t a b)
     }
 makeLenses ''LLState
 
@@ -129,7 +129,7 @@ llSent :: (Functor m, Monad m)
        -> StateT (LLState st t a b) m ()
 llSent cid t f = do
     st <- get
-    put $ st & llInFlight %~ HM.insert cid (SR f t)
+    put $ st & llInFlight %~ Hash.insert cid (SR f t)
 
 -- Find a request and remove it from the in-flight set.
 llFindRequest :: (Functor m, Monad m)
@@ -139,7 +139,7 @@ llFindRequest cid = do
     st <- get
     case st ^. llInFlight . at cid of
         Nothing -> return Nothing
-        Just sr -> Just sr <$ put (st & llInFlight %~ HM.delete cid)
+        Just sr -> Just sr <$ put (st & llInFlight %~ Hash.delete cid)
 
 runHurtle :: forall st t i a.
              Config st t             -- ^ Configuration
@@ -158,7 +158,7 @@ runLL :: forall st t a b.
 runLL Config{..} ll logError finish = do
     initialState <- configInit
     stateV <- STM.atomically $
-        STM.newTMVar (LLState 0 initialState Seq.empty HM.empty)
+        STM.newTMVar (LLState 0 initialState Seq.empty Hash.empty)
     begun <- STM.atomically newFlagPost
 
     let -- Compute another stage and send out the next request or finish.
@@ -199,7 +199,7 @@ runLL Config{..} ll logError finish = do
             state <- STM.readTMVar stateV
             let inFlight = state ^. llInFlight
                 queue    = state ^. llQueue
-            when (HM.null inFlight && not (Seq.null queue)) STM.retry
+            when (Hash.null inFlight && not (Seq.null queue)) STM.retry
             return (state ^. llState)
         resp <- configRecv st
         withStateV stateV category (Nothing :: Maybe ()) $ case resp of
@@ -233,7 +233,7 @@ runLL Config{..} ll logError finish = do
                 waitFlagPost begun
                 state <- STM.readTMVar stateV
                 guard (Seq.null (state ^. llQueue))
-                guard (HM.null  (state ^. llInFlight))
+                guard (Hash.null  (state ^. llInFlight))
             Log.debugM "runLL.wait" "killing threads"
             Async.cancel sender
             Async.cancel receiver
