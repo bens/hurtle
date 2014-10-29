@@ -165,7 +165,7 @@ runHurtle :: Show e
           => Config st t             -- ^ Configuration
           -> (i -> Request t e i a)  -- ^ Action for each input
           -> [i]                     -- ^ Initial values to enqueue
-          -> (st -> a -> IO ())      -- ^ Final action for each input
+          -> (a -> IO ())            -- ^ Final action for each input
           -> (LogMessage -> IO ())   -- ^ Log handler
           -> IO ()
 runHurtle cfg hl = runLL cfg (runRequest hl)
@@ -174,7 +174,7 @@ runLL :: Show e
       => Config st t                -- ^ Configuration
       -> (i -> LL st t e i a)       -- ^ Action for each input
       -> [i]                        -- ^ Initial values to enqueue
-      -> (st -> a -> IO ())         -- ^ Final action for each input
+      -> (a -> IO ())               -- ^ Final action for each input
       -> (LogMessage -> IO ())      -- ^ Log handler
       -> IO ()
 runLL Config{..} ll xs finish logIt = do
@@ -199,10 +199,10 @@ runLL Config{..} ll xs finish logIt = do
             (resp, enqs) <- runWriterT (hoist lift m)
             cids <- mapM llEnqueue enqs
             lift $ debugL category $ "enqueued " ++ show cids
-            st <- use llState
             case resp of
-                Pure x -> lift (finish st x)
+                Pure x -> lift (finish x)
                 Free (LLF t kont) -> do
+                    st <- use llState
                     lift (configSend st cid t)
                     llSent cid t (LL . kont)
                 Free (Throw e) ->

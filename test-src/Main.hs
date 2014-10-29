@@ -52,7 +52,7 @@ main = do
             when (x == 1) $
                 request 0
             return x
-        doneHandler _ x = Log.infoM "main" $ "result was " ++ show x
+        doneHandler x = Log.infoM "main" $ "result was " ++ show x
         logHandler (LogMessage lvl section msg) = case lvl of
             Debug   -> Log.debugM section msg
             Info    -> Log.infoM section msg
