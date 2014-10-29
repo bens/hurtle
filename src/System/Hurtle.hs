@@ -33,11 +33,11 @@ import           Prelude                    hiding (mapM_)
 newtype CallId
     = CallId Integer deriving (Eq, Show, Hashable)
 
-data Config st a = Config
+data Config st t = Config
     { configInit :: IO st
     , configTerm :: st -> IO ()
-    , configSend :: st -> CallId -> a -> IO ()
-    , configRecv :: st -> IO (Response st a)
+    , configSend :: st -> CallId -> t -> IO ()
+    , configRecv :: st -> IO (Response st t)
     }
 
 data Response st t
@@ -86,26 +86,26 @@ runRequest r = LL . go . unRequest . r
 
 data Queued a = Queued CallId a
 
-data SomeRequest st t a b = SR (t -> LL st t a b) t
+data SomeRequest st t i a = SR (t -> LL st t i a) t
 
 data LLF st t a = LLF t (t -> a)
 
 instance Functor (LLF st t) where
     fmap g (LLF p f) = LLF p (g . f)
 
-newtype LL st t a b = LL (FreeT (LLF st t) (WriterT [a] IO) b)
+newtype LL st t i a = LL (FreeT (LLF st t) (WriterT [i] IO) a)
 
-data LLState st t a b = LLState
+data LLState st t i a = LLState
     { _llNextId   :: Integer
     , _llState    :: st
-    , _llQueue    :: Seq.Seq (Queued a)
-    , _llInFlight :: Hash.HashMap CallId (SomeRequest st t a b)
+    , _llQueue    :: Seq.Seq (Queued i)
+    , _llInFlight :: Hash.HashMap CallId (SomeRequest st t i a)
     }
 makeLenses ''LLState
 
 -- Enqueue a new initial state for processing.
 llEnqueue :: (Functor m, Monad m)
-          => a -> StateT (LLState st t a b) m CallId
+          => i -> StateT (LLState st t i a) m CallId
 llEnqueue x = do
     st <- get
     let st' = st & llNextId +~ 1
@@ -115,7 +115,7 @@ llEnqueue x = do
 
 -- Pull the next initial state from the queue.
 llUnqueue :: (Functor m, Monad m)
-          => StateT (LLState st t a b) m (Maybe (CallId, a))
+          => StateT (LLState st t i a) m (Maybe (CallId, i))
 llUnqueue = do
     st <- get
     case Seq.viewr (st ^. llQueue) of
@@ -124,8 +124,8 @@ llUnqueue = do
 
 -- Mark a request as being sent.
 llSent :: (Functor m, Monad m)
-       => CallId -> t -> (t -> LL st t a b)
-       -> StateT (LLState st t a b) m ()
+       => CallId -> t -> (t -> LL st t i a)
+       -> StateT (LLState st t i a) m ()
 llSent cid t f = do
     st <- get
     put $ st & llInFlight %~ Hash.insert cid (SR f t)
@@ -133,7 +133,7 @@ llSent cid t f = do
 -- Find a request and remove it from the in-flight set.
 llFindRequest :: (Functor m, Monad m)
               => CallId
-              -> StateT (LLState st t a b) m (Maybe (SomeRequest st t a b))
+              -> StateT (LLState st t i a) m (Maybe (SomeRequest st t i a))
 llFindRequest cid = do
     st <- get
     case st ^. llInFlight . at cid of
@@ -148,10 +148,10 @@ runHurtle :: Config st t             -- ^ Configuration
 runHurtle cfg hl = runLL cfg (runRequest hl)
 
 runLL :: Config st t                -- ^ Configuration
-      -> (a -> LL st t a b)         -- ^ Action for each input
+      -> (i -> LL st t i a)         -- ^ Action for each input
       -> (String -> IO ())          -- ^ Error log action
-      -> (st -> b -> IO ())         -- ^ Final action for each input
-      -> IO (a -> IO (), IO ())     -- ^ Provide an enqueue and a wait action.
+      -> (st -> a -> IO ())         -- ^ Final action for each input
+      -> IO (i -> IO (), IO ())     -- ^ Provide an enqueue and a wait action.
 runLL Config{..} ll logError finish = do
     initialState <- configInit
     stateV <- STM.atomically $
@@ -251,9 +251,9 @@ flagPost (FlagPost v) = () <$ STM.tryPutTMVar v ()
 waitFlagPost :: FlagPost -> STM.STM ()
 waitFlagPost (FlagPost v) = STM.readTMVar v
 
-withStateV :: Show x
-           => STM.TMVar (LLState st t a b) -> String -> Maybe x
-           -> StateT (LLState st t a b) IO c -> IO c
+withStateV :: Show b
+           => STM.TMVar (LLState st t i a) -> String -> Maybe b
+           -> StateT (LLState st t i a) IO c -> IO c
 withStateV stateV cat xM m = do
     state <- STM.atomically $ STM.takeTMVar stateV
     let cleanup = do
