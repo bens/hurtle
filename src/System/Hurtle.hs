@@ -174,16 +174,16 @@ runLL Config{..} ll logIt finish = do
         STM.newTMVar (LLState 0 initialState Seq.empty Hash.empty)
     begun <- STM.atomically newFlagPost
 
-    let debugL   = (logIt .) . LogMessage Debug
+    let withSt cat x = withStateV stateV logIt cat (x :: Maybe CallId)
+        debugL   = (logIt .) . LogMessage Debug
         infoL    = (logIt .) . LogMessage Info
         warningL = (logIt .) . LogMessage Warning
         errorL   = (logIt .) . LogMessage Error
 
         -- Compute another stage and send out the next request or finish.
-        enqueue x =
-            withStateV stateV logIt "runLL.enqueue" (Nothing :: Maybe ()) $ do
-                cid <- llEnqueue x
-                lift $ debugL "runLL.enqueue" $ "enqueued " ++ show cid
+        enqueue x = withSt "runLL.enqueue" Nothing $ do
+            cid <- llEnqueue x
+            lift . debugL "runLL.enqueue" $ "enqueued " ++ show cid
 
         doStep category cid (LL (FreeT m)) = do
             (resp, enqs) <- runWriterT (hoist lift m)
@@ -205,8 +205,7 @@ runLL Config{..} ll logIt finish = do
         (cid, x) <- STM.atomically $ do
             (xM, state) <- runState llUnqueue <$> STM.takeTMVar stateV
             maybe STM.retry (\x -> x <$ STM.putTMVar stateV state) xM
-        withStateV stateV logIt category (Just cid) $
-            doStep category cid (ll x)
+        withSt category (Just cid) $ doStep category cid (ll x)
         STM.atomically $ flagPost begun
 
     -- Receive a reply and run the next step of a chain.
@@ -220,7 +219,7 @@ runLL Config{..} ll logIt finish = do
             when (Hash.null inFlight && not (Seq.null queue)) STM.retry
             return (state ^. llState)
         resp <- configRecv st
-        withStateV stateV logIt category (Nothing :: Maybe ()) $ case resp of
+        withSt category Nothing $ case resp of
             Ok cid t -> do
                 reqM <- llFindRequest cid
                 case reqM of
