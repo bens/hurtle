@@ -16,7 +16,8 @@ import qualified Control.Concurrent.Async   as Async
 import qualified Control.Concurrent.STM     as STM
 import qualified Control.Exception          as Exc
 import           Control.Lens               hiding ((<|))
-import           Control.Monad              (forever, guard, when)
+import           Control.Monad              (guard, when)
+import           Control.Monad.Fix          (fix)
 import           Control.Monad.Morph        (hoist, lift)
 import           Control.Monad.Trans.Free
 import           Control.Monad.Trans.State  hiding (state)
@@ -179,6 +180,7 @@ runLL Config{..} ll logIt finish = do
     stateV <- STM.atomically $
         STM.newTMVar (LLState 0 initialState Seq.empty Hash.empty)
     begun <- STM.atomically newFlagPost
+    done  <- STM.atomically newFlagPost
 
     let withSt cat x = withStateV stateV logIt cat (x :: Maybe CallId)
         debugL   = (logIt .) . LogMessage Debug
@@ -205,57 +207,71 @@ runLL Config{..} ll logIt finish = do
                     lift $ errorL category (show e)
 
     -- Launch each enqueued chain.
-    sender <- Async.async . forever $ do
+    sender <- Async.async . fix $ \loop -> do
         let category = "runLL.sender"
+            onDone = Nothing <$ waitFlagPost done
+            getNext = do
+                (xM, state) <- runState llUnqueue <$> STM.takeTMVar stateV
+                maybe STM.retry (\x -> Just x <$ STM.putTMVar stateV state) xM
         debugL category "waiting..."
-        (cid, x) <- STM.atomically $ do
-            (xM, state) <- runState llUnqueue <$> STM.takeTMVar stateV
-            maybe STM.retry (\x -> x <$ STM.putTMVar stateV state) xM
-        withSt category (Just cid) $ doStep category cid (ll x)
-        STM.atomically $ flagPost begun
+        next <- STM.atomically $ onDone <|> getNext
+        case next of
+            Nothing -> infoL category "finished"
+            Just (cid, x) -> do
+                withSt category (Just cid) $ doStep category cid (ll x)
+                STM.atomically $ flagPost begun
+                Conc.yield >> loop
 
     -- Receive a reply and run the next step of a chain.
-    receiver <- Async.async . forever $ do
+    receiver <- Async.async . fix $ \loop -> do
         let category = "runLL.receiver"
+            onDone = Nothing <$ waitFlagPost done
+            getState = do
+                waitFlagPost begun
+                state <- STM.readTMVar stateV
+                let inFlight = state ^. llInFlight
+                    queue    = state ^. llQueue
+                if Hash.null inFlight && not (Seq.null queue)
+                    then STM.retry
+                    else return (Just (state ^. llState))
             onRequest cid reqM = case reqM of
                 Nothing -> lift $ errorL category "request handler not found!"
                 Just (SR kont t) -> doStep category cid (kont t)
-        st <- STM.atomically $ do
-            waitFlagPost begun
-            state <- STM.readTMVar stateV
-            let inFlight = state ^. llInFlight
-                queue    = state ^. llQueue
-            when (Hash.null inFlight && not (Seq.null queue)) STM.retry
-            return (state ^. llState)
-        resp <- configRecv st
-        withSt category Nothing $ case resp of
-            Ok cid t -> do
-                reqM <- llFindRequest cid
-                onRequest cid ((someRequestValue .~ t) <$> reqM)
-            Retry cid stM -> do
-                lift $ warningL category ("retrying " ++ show cid)
-                mapM_ (llState .=) stM
-                llFindRequest cid >>= onRequest cid
-            LogError msg ->
-                -- TODO: what else??
-                lift $ errorL category msg
-            Fatal msg ->
-                lift $ errorL category msg
-        Conc.yield
+
+        stM <- STM.atomically $ onDone <|> getState
+        case stM of
+            Nothing -> infoL category "finished"
+            Just st -> do
+                resp <- configRecv st
+                continue <- withSt category Nothing $ case resp of
+                    Ok cid t -> do
+                        reqM <- llFindRequest cid
+                        True <$ onRequest cid ((someRequestValue .~ t) <$> reqM)
+                    Retry cid stM' -> do
+                        lift $ warningL category ("retrying " ++ show cid)
+                        mapM_ (llState .=) stM'
+                        True <$ (llFindRequest cid >>= onRequest cid)
+                    LogError msg ->
+                        -- TODO: what else??
+                        True <$ lift (errorL category msg)
+                    Fatal msg ->
+                        False <$ lift (errorL category $ "FATAL: " ++ msg)
+                when continue $
+                    Conc.yield >> loop
 
     let wait = do
             debugL "runLL.wait" "waiting..."
             STM.atomically $ do
                 waitFlagPost begun
                 state <- STM.readTMVar stateV
-                guard (Seq.null (state ^. llQueue))
-                guard (Hash.null  (state ^. llInFlight))
-            debugL "runLL.wait" "killing threads"
-            Async.cancel sender
-            Async.cancel receiver
+                guard (Seq.null  (state ^. llQueue))
+                guard (Hash.null (state ^. llInFlight))
+                flagPost done
+            debugL "runLL.wait" "stopping threads"
+            mapM_ Async.wait [sender, receiver]
+            infoL "runLL.wait" "finished"
 
-    -- TODO: Async.link the threads but don't bork on ThreadKilled exceptions.
-    -- traverse_ Async.link [sender, receiver]
+    mapM_ Async.link [sender, receiver]
     return (enqueue, wait)
 
 
