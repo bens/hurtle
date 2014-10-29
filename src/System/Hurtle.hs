@@ -5,6 +5,7 @@
 module System.Hurtle
   ( CallId, Config(..)
   , Request, Response(..)
+  , LogMessage(..), LogLevel(..)
   , makeCall, request
   , runHurtle
   ) where
@@ -25,7 +26,6 @@ import           Data.Hashable              (Hashable)
 import qualified Data.HashMap.Strict        as Hash
 import           Data.Sequence              (ViewR (..), (<|))
 import qualified Data.Sequence              as Seq
-import qualified System.Log.Logger          as Log
 import           Text.Printf
 
 import           Prelude                    hiding (mapM_)
@@ -45,6 +45,16 @@ data Response st t
     | Retry CallId (Maybe st)
     | LogError String
     | Fatal String
+
+data LogLevel
+    = Debug | Info | Warning | Error deriving (Eq, Ord, Show)
+
+data LogMessage
+    = LogMessage{ logLevel   :: LogLevel
+                , logSection :: String
+                , logMessage :: String
+                }
+      deriving Show
 
 --
 -- HIGH LEVEL
@@ -142,31 +152,37 @@ llFindRequest cid = do
 
 runHurtle :: Config st t             -- ^ Configuration
           -> (i -> Request t i a)    -- ^ Action for each input
-          -> (String -> IO ())       -- ^ Error log action
+          -> (LogMessage -> IO ())   -- ^ Log handler
           -> (st -> a -> IO ())      -- ^ Final action for each input
           -> IO (i -> IO (), IO ())  -- ^ Provide an enqueue and a wait action.
 runHurtle cfg hl = runLL cfg (runRequest hl)
 
 runLL :: Config st t                -- ^ Configuration
       -> (i -> LL st t i a)         -- ^ Action for each input
-      -> (String -> IO ())          -- ^ Error log action
+      -> (LogMessage -> IO ())      -- ^ Log handler
       -> (st -> a -> IO ())         -- ^ Final action for each input
       -> IO (i -> IO (), IO ())     -- ^ Provide an enqueue and a wait action.
-runLL Config{..} ll logError finish = do
+runLL Config{..} ll logIt finish = do
     initialState <- configInit
     stateV <- STM.atomically $
         STM.newTMVar (LLState 0 initialState Seq.empty Hash.empty)
     begun <- STM.atomically newFlagPost
 
-    let -- Compute another stage and send out the next request or finish.
-        enqueue x = withStateV stateV "runLL.enqueue" (Nothing :: Maybe ()) $ do
-            cid <- llEnqueue x
-            lift $ Log.debugM "runLL.enqueue" $ "enqueued " ++ show cid
+    let debugL   = (logIt .) . LogMessage Debug
+        infoL    = (logIt .) . LogMessage Info
+        warningL = (logIt .) . LogMessage Warning
+        errorL   = (logIt .) . LogMessage Error
+
+        -- Compute another stage and send out the next request or finish.
+        enqueue x =
+            withStateV stateV logIt "runLL.enqueue" (Nothing :: Maybe ()) $ do
+                cid <- llEnqueue x
+                lift $ debugL "runLL.enqueue" $ "enqueued " ++ show cid
 
         doStep category cid (LL (FreeT m)) = do
             (resp, enqs) <- runWriterT (hoist lift m)
             cids <- mapM llEnqueue enqs
-            lift $ Log.debugM category $ "enqueued " ++ show cids
+            lift $ debugL category $ "enqueued " ++ show cids
             st <- use llState
             case resp of
                 Pure x -> lift (finish st x)
@@ -177,11 +193,11 @@ runLL Config{..} ll logError finish = do
     -- Launch each enqueued chain.
     sender <- Async.async . forever $ do
         let category = "runLL.sender"
-        Log.debugM category "waiting..."
+        debugL category "waiting..."
         (cid, x) <- STM.atomically $ do
             (xM, state) <- runState llUnqueue <$> STM.takeTMVar stateV
             maybe STM.retry (\x -> x <$ STM.putTMVar stateV state) xM
-        withStateV stateV category (Just cid) $
+        withStateV stateV logIt category (Just cid) $
             doStep category cid (ll x)
         STM.atomically $ flagPost begun
 
@@ -196,38 +212,38 @@ runLL Config{..} ll logError finish = do
             when (Hash.null inFlight && not (Seq.null queue)) STM.retry
             return (state ^. llState)
         resp <- configRecv st
-        withStateV stateV category (Nothing :: Maybe ()) $ case resp of
+        withStateV stateV logIt category (Nothing :: Maybe ()) $ case resp of
             Ok cid t -> do
                 reqM <- llFindRequest cid
                 case reqM of
                     Nothing ->
-                        lift $ Log.errorM category "request handler not found!"
+                        lift $ errorL category "request handler not found!"
                     Just (SR kont _) ->
                         doStep category cid (kont t)
             Retry cid stM -> do
-                lift $ Log.warningM category ("retrying " ++ show cid)
+                lift $ warningL category ("retrying " ++ show cid)
                 mapM_ (llState .=) stM
                 reqM <- llFindRequest cid
                 case reqM of
                     Nothing ->
-                        lift $ Log.errorM category "request handler not found!"
+                        lift $ errorL category "request handler not found!"
                     Just (SR kont t) ->
                         doStep category cid (kont t)
             LogError msg ->
                 -- TODO: what else??
-                lift $ logError msg
+                lift $ errorL category msg
             Fatal msg ->
-                lift $ Log.criticalM category msg
+                lift $ errorL category msg
         Conc.yield
 
     let wait = do
-            Log.debugM "runLL.wait" "waiting..."
+            debugL "runLL.wait" "waiting..."
             STM.atomically $ do
                 waitFlagPost begun
                 state <- STM.readTMVar stateV
                 guard (Seq.null (state ^. llQueue))
                 guard (Hash.null  (state ^. llInFlight))
-            Log.debugM "runLL.wait" "killing threads"
+            debugL "runLL.wait" "killing threads"
             Async.cancel sender
             Async.cancel receiver
 
@@ -252,15 +268,19 @@ waitFlagPost :: FlagPost -> STM.STM ()
 waitFlagPost (FlagPost v) = STM.readTMVar v
 
 withStateV :: Show b
-           => STM.TMVar (LLState st t i a) -> String -> Maybe b
+           => STM.TMVar (LLState st t i a)
+           -> (LogMessage -> IO ())      -- ^ Log handler
+           -> String -> Maybe b
            -> StateT (LLState st t i a) IO c -> IO c
-withStateV stateV cat xM m = do
+withStateV stateV logIt cat xM m = do
     state <- STM.atomically $ STM.takeTMVar stateV
     let cleanup = do
-            Log.warningM cat "reverting state"
+            logIt (LogMessage Warning cat "reverting state")
             STM.atomically (STM.putTMVar stateV state)
     flip Exc.onException cleanup $ do
-        Log.debugM cat $ ">>>" ++ maybe "" (printf " (%s)" . show) xM
+        logIt . LogMessage Debug cat $
+            ">>>" ++ maybe "" (printf " (%s)" . show) xM
         (x, state') <- runStateT m state
-        Log.debugM cat $ "<<<" ++ maybe "" (printf " (%s)" . show) xM
+        logIt . LogMessage Debug cat $
+            "<<<" ++ maybe "" (printf " (%s)" . show) xM
         x <$ STM.atomically (STM.putTMVar stateV state')

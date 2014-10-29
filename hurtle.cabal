@@ -22,7 +22,6 @@ library
     , containers
     , free
     , hashable
-    , hslogger
     , lens
     , mmorph
     , stm
