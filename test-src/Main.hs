@@ -8,6 +8,7 @@ import qualified Data.HashMap.Strict       as HM
 import           System.IO                 (stderr)
 import qualified System.Log.Handler.Simple as Log
 import qualified System.Log.Logger         as Log
+import           Text.Read                 (readEither)
 
 import           System.Hurtle
 
@@ -35,8 +36,8 @@ testConfig = Config
                 return $ Ok cid x
   }
 
-sendInt :: Int -> Request String i Int
-sendInt = fmap read . makeCall . show
+sendInt :: Int -> Request String String i Int
+sendInt = flip makeCall readEither . show
 
 main :: IO ()
 main = do
@@ -51,9 +52,13 @@ main = do
             when (x == 1) $
                 request 0
             return x
-    (enq, wait) <- runHurtle testConfig f putStrLn $ \_ x ->
-        Log.infoM "main" (show x)
-    enq 5
-    wait
+        doneHandler x = Log.infoM "main" $ "result was " ++ show x
+        logHandler (LogMessage lvl section msg) = case lvl of
+            Debug   -> Log.debugM section msg
+            Info    -> Log.infoM section msg
+            Warning -> Log.warningM section msg
+            Error   -> Log.errorM section msg
+
+    runHurtle testConfig f [5] doneHandler logHandler
     Conc.threadDelay (10^(5::Int))
     Log.infoM "main" "DONE"
