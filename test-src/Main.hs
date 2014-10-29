@@ -8,6 +8,7 @@ import qualified Data.HashMap.Strict       as HM
 import           System.IO                 (stderr)
 import qualified System.Log.Handler.Simple as Log
 import qualified System.Log.Logger         as Log
+import           Text.Read                 (readEither)
 
 import           System.Hurtle
 
@@ -35,8 +36,8 @@ testConfig = Config
                 return $ Ok cid x
   }
 
-sendInt :: Int -> Request String i Int
-sendInt = fmap read . makeCall . show
+sendInt :: Int -> Request String String i Int
+sendInt = flip makeCall readEither . show
 
 main :: IO ()
 main = do
