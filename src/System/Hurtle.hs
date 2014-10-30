@@ -81,7 +81,7 @@ newtype Request t e i a
     = Request{ unRequest :: Free (RequestF t e i) a }
       deriving (Functor, Applicative, Monad)
 
-runRequest :: (i -> Request t e i a) -> i -> LL st t e i a
+runRequest :: (i -> Request t e i a) -> i -> LL t e i a
 runRequest r = LL . go . unRequest . r
   where
     go (FreeT (Identity (Pure x))) = FreeT (return (Pure x))
@@ -99,29 +99,29 @@ runRequest r = LL . go . unRequest . r
 
 data Queued a = Queued CallId a
 
-data SomeRequest st t e i a = SR (t -> LL st t e i a) t
+data SomeRequest t e i a = SR (t -> LL t e i a) t
 
-someRequestCont :: Lens' (SomeRequest st t e i a) (t -> LL st t e i a)
+someRequestCont :: Lens' (SomeRequest t e i a) (t -> LL t e i a)
 someRequestCont = lens (\(SR kont _) -> kont) (\(SR _ t) kont -> SR kont t)
 
-someRequestValue :: Lens' (SomeRequest st t e i a) t
+someRequestValue :: Lens' (SomeRequest t e i a) t
 someRequestValue = lens (\(SR _ t) -> t) (\(SR kont _) t -> SR kont t)
 
-data LLF st t e a
+data LLF t e a
     = LLF t (t -> a)
     | Throw e
 
-instance Functor (LLF st t e) where
+instance Functor (LLF t e) where
     fmap g (LLF p f) = LLF p (g . f)
     fmap _ (Throw e) = Throw e
 
-newtype LL st t e i a = LL (FreeT (LLF st t e) (WriterT [i] IO) a)
+newtype LL t e i a = LL (FreeT (LLF t e) (WriterT [i] IO) a)
 
 data LLState st t e i a = LLState
     { _llNextId   :: Integer
     , _llState    :: st
     , _llQueue    :: Seq.Seq (Queued i)
-    , _llInFlight :: Hash.HashMap CallId (SomeRequest st t e i a)
+    , _llInFlight :: Hash.HashMap CallId (SomeRequest t e i a)
     }
 makeLenses ''LLState
 
@@ -146,7 +146,7 @@ llUnqueue = do
 
 -- Mark a request as being sent.
 llSent :: (Functor m, Monad m)
-       => CallId -> t -> (t -> LL st t e i a)
+       => CallId -> t -> (t -> LL t e i a)
        -> StateT (LLState st t e i a) m ()
 llSent cid t f = do
     st <- get
@@ -155,7 +155,7 @@ llSent cid t f = do
 -- Find a request and remove it from the in-flight set.
 llFindRequest :: (Functor m, Monad m)
               => CallId
-              -> StateT (LLState st t e i a) m (Maybe (SomeRequest st t e i a))
+              -> StateT (LLState st t e i a) m (Maybe (SomeRequest t e i a))
 llFindRequest cid = do
     st <- get
     case st ^. llInFlight . at cid of
@@ -173,7 +173,7 @@ runHurtle cfg hl = runLL cfg (runRequest hl)
 
 runLL :: Show e
       => Config st t                -- ^ Configuration
-      -> (i -> LL st t e i a)       -- ^ Action for each input
+      -> (i -> LL t e i a)          -- ^ Action for each input
       -> [i]                        -- ^ Initial values to enqueue
       -> (a -> IO ())               -- ^ Final action for each input
       -> (LogMessage -> IO ())      -- ^ Log handler
