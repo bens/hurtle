@@ -12,7 +12,7 @@ import           Text.Read                 (readEither)
 
 import           System.Hurtle
 
-testConfig :: Config (STM.TVar (HM.HashMap CallId String)) String
+testConfig :: Config String String
 testConfig = Config
   { configInit = STM.atomically (STM.newTVar HM.empty)
   , configTerm = \_ -> return ()
@@ -36,7 +36,7 @@ testConfig = Config
                 return $ Ok cid x
   }
 
-sendInt :: Int -> Request String String i Int
+sendInt :: Int -> Request String String String i Int
 sendInt = flip makeCall readEither . show
 
 main :: IO ()

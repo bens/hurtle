@@ -1,3 +1,4 @@
+{-# LANGUAGE ExistentialQuantification  #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE TemplateHaskell            #-}
@@ -34,15 +35,15 @@ import           Prelude                    hiding (mapM_)
 newtype CallId
     = CallId Integer deriving (Eq, Show, Hashable)
 
-data Config st t = Config
+data Config t t' = forall st. Config
     { configInit :: IO st
     , configTerm :: st -> IO ()
     , configSend :: st -> CallId -> t -> IO ()
-    , configRecv :: st -> IO (Response st t)
+    , configRecv :: st -> IO (Response st t')
     }
 
-data Response st t
-    = Ok CallId t
+data Response st t'
+    = Ok CallId t'
     | Retry CallId (Maybe st)
     | LogError String
     | Fatal String
@@ -61,27 +62,27 @@ data LogMessage
 -- HIGH LEVEL
 --
 
-data RequestF t e i a
+data RequestF t t' e i a
     = Enqueue i a
-    | MakeCall t (t -> Either e a)
+    | MakeCall t (t' -> Either e a)
 
 -- | Initiate a new request.
-request :: i -> Request t e i ()
+request :: i -> Request t t' e i ()
 request x = Request . liftF $ Enqueue x ()
 
 -- | Make a remote call and give back the response when it arrives.
-makeCall :: t -> (t -> Either e a) -> Request t e i a
+makeCall :: t -> (t' -> Either e a) -> Request t t' e i a
 makeCall x = Request . liftF . MakeCall x
 
-instance Functor (RequestF t e i) where
+instance Functor (RequestF t t' e i) where
     fmap f (Enqueue x k) = Enqueue x (f k)
     fmap f (MakeCall x k) = MakeCall x (fmap f . k)
 
-newtype Request t e i a
-    = Request{ unRequest :: Free (RequestF t e i) a }
+newtype Request t t' e i a
+    = Request{ unRequest :: Free (RequestF t t' e i) a }
       deriving (Functor, Applicative, Monad)
 
-runRequest :: (i -> Request t e i a) -> i -> LL st t e i a
+runRequest :: (i -> Request t t' e i a) -> i -> LL t t' e i a
 runRequest r = LL . go . unRequest . r
   where
     go (FreeT (Identity (Pure x))) = FreeT (return (Pure x))
@@ -99,35 +100,29 @@ runRequest r = LL . go . unRequest . r
 
 data Queued a = Queued CallId a
 
-data SomeRequest st t e i a = SR (t -> LL st t e i a) t
+data SomeRequest t t' e i a = SR (t' -> LL t t' e i a) t
 
-someRequestCont :: Lens' (SomeRequest st t e i a) (t -> LL st t e i a)
-someRequestCont = lens (\(SR kont _) -> kont) (\(SR _ t) kont -> SR kont t)
-
-someRequestValue :: Lens' (SomeRequest st t e i a) t
-someRequestValue = lens (\(SR _ t) -> t) (\(SR kont _) t -> SR kont t)
-
-data LLF st t e a
-    = LLF t (t -> a)
+data LLF t t' e a
+    = LLF t (t' -> a)
     | Throw e
 
-instance Functor (LLF st t e) where
+instance Functor (LLF t t' e) where
     fmap g (LLF p f) = LLF p (g . f)
     fmap _ (Throw e) = Throw e
 
-newtype LL st t e i a = LL (FreeT (LLF st t e) (WriterT [i] IO) a)
+newtype LL t t' e i a = LL (FreeT (LLF t t' e) (WriterT [i] IO) a)
 
-data LLState st t e i a = LLState
+data LLState st t t' e i a = LLState
     { _llNextId   :: Integer
     , _llState    :: st
     , _llQueue    :: Seq.Seq (Queued i)
-    , _llInFlight :: Hash.HashMap CallId (SomeRequest st t e i a)
+    , _llInFlight :: Hash.HashMap CallId (SomeRequest t t' e i a)
     }
 makeLenses ''LLState
 
 -- Enqueue a new initial state for processing.
 llEnqueue :: (Functor m, Monad m)
-          => i -> StateT (LLState st t e i a) m CallId
+          => i -> StateT (LLState st t t' e i a) m CallId
 llEnqueue x = do
     st <- get
     let st' = st & llNextId +~ 1
@@ -137,7 +132,7 @@ llEnqueue x = do
 
 -- Pull the next initial state from the queue.
 llUnqueue :: (Functor m, Monad m)
-          => StateT (LLState st t e i a) m (Maybe (CallId, i))
+          => StateT (LLState st t t' e i a) m (Maybe (CallId, i))
 llUnqueue = do
     st <- get
     case Seq.viewr (st ^. llQueue) of
@@ -146,8 +141,8 @@ llUnqueue = do
 
 -- Mark a request as being sent.
 llSent :: (Functor m, Monad m)
-       => CallId -> t -> (t -> LL st t e i a)
-       -> StateT (LLState st t e i a) m ()
+       => CallId -> t -> (t' -> LL t t' e i a)
+       -> StateT (LLState st t t' e i a) m ()
 llSent cid t f = do
     st <- get
     put $ st & llInFlight %~ Hash.insert cid (SR f t)
@@ -155,7 +150,8 @@ llSent cid t f = do
 -- Find a request and remove it from the in-flight set.
 llFindRequest :: (Functor m, Monad m)
               => CallId
-              -> StateT (LLState st t e i a) m (Maybe (SomeRequest st t e i a))
+              -> StateT (LLState st t t' e i a) m
+                     (Maybe (SomeRequest t t' e i a))
 llFindRequest cid = do
     st <- get
     case st ^. llInFlight . at cid of
@@ -163,17 +159,17 @@ llFindRequest cid = do
         Just sr -> Just sr <$ put (st & llInFlight %~ Hash.delete cid)
 
 runHurtle :: Show e
-          => Config st t             -- ^ Configuration
-          -> (i -> Request t e i a)  -- ^ Action for each input
-          -> [i]                     -- ^ Initial values to enqueue
-          -> (a -> IO ())            -- ^ Final action for each input
-          -> (LogMessage -> IO ())   -- ^ Log handler
+          => Config t t'                -- ^ Configuration
+          -> (i -> Request t t' e i a)  -- ^ Action for each input
+          -> [i]                        -- ^ Initial values to enqueue
+          -> (a -> IO ())               -- ^ Final action for each input
+          -> (LogMessage -> IO ())      -- ^ Log handler
           -> IO ()
 runHurtle cfg hl = runLL cfg (runRequest hl)
 
 runLL :: Show e
-      => Config st t                -- ^ Configuration
-      -> (i -> LL st t e i a)       -- ^ Action for each input
+      => Config t t'                -- ^ Configuration
+      -> (i -> LL t t' e i a)       -- ^ Action for each input
       -> [i]                        -- ^ Initial values to enqueue
       -> (a -> IO ())               -- ^ Final action for each input
       -> (LogMessage -> IO ())      -- ^ Log handler
@@ -237,23 +233,28 @@ runLL Config{..} ll xs finish logIt = do
                 if Hash.null inFlight && not (Seq.null queue)
                     then STM.retry
                     else return (Just (state ^. llState))
-            onRequest cid reqM = case reqM of
-                Nothing -> lift $ errorL category "request handler not found!"
-                Just (SR kont t) -> doStep category cid (kont t)
 
         stM <- STM.atomically $ onDone <|> getState
         case stM of
             Nothing -> infoL category "finished"
             Just st -> do
+                let badHandler = "request handler not found!"
                 resp <- configRecv st
                 continue <- withSt category Nothing $ case resp of
                     Ok cid t -> do
                         reqM <- llFindRequest cid
-                        True <$ onRequest cid ((someRequestValue .~ t) <$> reqM)
+                        case reqM of
+                            Nothing -> lift $ errorL category badHandler
+                            Just (SR kont _) -> doStep category cid (kont t)
+                        return True
                     Retry cid stM' -> do
                         lift $ warningL category ("retrying " ++ show cid)
                         mapM_ (llState .=) stM'
-                        True <$ (llFindRequest cid >>= onRequest cid)
+                        reqM <- llFindRequest cid
+                        case reqM of
+                            Nothing -> lift $ errorL category badHandler
+                            Just (SR kont t) -> llSent cid t kont
+                        return True
                     LogError msg ->
                         -- TODO: what else??
                         True <$ lift (errorL category msg)
@@ -291,10 +292,10 @@ waitFlagPost :: FlagPost -> STM.STM ()
 waitFlagPost (FlagPost v) = STM.readTMVar v
 
 withStateV :: Show b
-           => STM.TMVar (LLState st t e i a)
+           => STM.TMVar (LLState st t t' e i a)
            -> (LogMessage -> IO ())      -- ^ Log handler
            -> String -> Maybe b
-           -> StateT (LLState st t e i a) IO c -> IO c
+           -> StateT (LLState st t t' e i a) IO c -> IO c
 withStateV stateV logIt cat xM m = do
     state <- STM.atomically $ STM.takeTMVar stateV
     let cleanup = do
