@@ -113,6 +113,7 @@ data LLF st t e a
 
 instance Functor (LLF st t e) where
     fmap g (LLF p f) = LLF p (g . f)
+    fmap _ (Throw e) = Throw e
 
 newtype LL st t e i a = LL (FreeT (LLF st t e) (WriterT [i] IO) a)
 
