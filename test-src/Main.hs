@@ -12,7 +12,7 @@ import           Text.Read                 (readEither)
 
 import           System.Hurtle
 
-testConfig :: Config (STM.TVar (HM.HashMap CallId String)) String
+testConfig :: Config String
 testConfig = Config
   { configInit = STM.atomically (STM.newTVar HM.empty)
   , configTerm = \_ -> return ()

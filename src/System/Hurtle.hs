@@ -1,3 +1,4 @@
+{-# LANGUAGE ExistentialQuantification  #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE TemplateHaskell            #-}
@@ -34,7 +35,7 @@ import           Prelude                    hiding (mapM_)
 newtype CallId
     = CallId Integer deriving (Eq, Show, Hashable)
 
-data Config st t = Config
+data Config t = forall st. Config
     { configInit :: IO st
     , configTerm :: st -> IO ()
     , configSend :: st -> CallId -> t -> IO ()
@@ -163,7 +164,7 @@ llFindRequest cid = do
         Just sr -> Just sr <$ put (st & llInFlight %~ Hash.delete cid)
 
 runHurtle :: Show e
-          => Config st t             -- ^ Configuration
+          => Config t                -- ^ Configuration
           -> (i -> Request t e i a)  -- ^ Action for each input
           -> [i]                     -- ^ Initial values to enqueue
           -> (a -> IO ())            -- ^ Final action for each input
@@ -172,7 +173,7 @@ runHurtle :: Show e
 runHurtle cfg hl = runLL cfg (runRequest hl)
 
 runLL :: Show e
-      => Config st t                -- ^ Configuration
+      => Config t                   -- ^ Configuration
       -> (i -> LL t e i a)          -- ^ Action for each input
       -> [i]                        -- ^ Initial values to enqueue
       -> (a -> IO ())               -- ^ Final action for each input
