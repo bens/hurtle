@@ -27,6 +27,7 @@ library
     , stm
     , transformers
     , unordered-containers
+  ghc-options:      -Wall
   hs-source-dirs:   src
   default-language: Haskell2010
 
@@ -40,5 +41,6 @@ test-suite hurtle-test
     , hurtle
     , stm
     , unordered-containers
+  ghc-options:      -Wall
   hs-source-dirs:   test-src
   default-language: Haskell2010
