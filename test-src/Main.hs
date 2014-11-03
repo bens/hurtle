@@ -12,7 +12,7 @@ import           Text.Read                 (readEither)
 
 import           System.Hurtle
 
-testConfig :: Config String String
+testConfig :: Config String String String
 testConfig = Config
   { configInit = STM.atomically (STM.newTVar HM.empty)
   , configTerm = \_ -> return ()
@@ -47,11 +47,12 @@ main = do
     Log.updateGlobalLogger Log.rootLoggerName (setLevel . setHandler)
 
     let doneHandler x = Log.infoM "main" $ "result was " ++ show x
-        logHandler (LogMessage lvl section msg) = case lvl of
-            Debug   -> Log.debugM section msg
-            Info    -> Log.infoM section msg
-            Warning -> Log.warningM section msg
-            Error   -> Log.errorM section msg
+        logHandler msg = case logLevel msg of
+            Debug   -> Log.debugM   component (logDescription ("ERR: "++) msg)
+            Info    -> Log.infoM    component (logDescription ("ERR: "++) msg)
+            Warning -> Log.warningM component (logDescription ("ERR: "++) msg)
+            Error   -> Log.errorM   component (logDescription ("ERR: "++) msg)
+            where component = "Hurtle." ++ show (logComponent msg)
 
     runHurtle testConfig doneHandler logHandler [5] $ \x -> do
         sendInt x

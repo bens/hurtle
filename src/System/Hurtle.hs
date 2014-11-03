@@ -6,7 +6,8 @@
 module System.Hurtle
   ( CallId, Config(..)
   , Request, Response(..)
-  , LogMessage(..), LogLevel(..)
+  , Log(..), Level(..), Component(..)
+  , logDescription, logLevel, logComponent
   , makeCall, request
   , runHurtle
   ) where
@@ -16,7 +17,7 @@ import qualified Control.Concurrent         as Conc
 import qualified Control.Concurrent.Async   as Async
 import qualified Control.Concurrent.STM     as STM
 import qualified Control.Exception          as Exc
-import           Control.Lens               hiding ((<|))
+import           Control.Lens               hiding (Level, (<|))
 import           Control.Monad              (guard, when)
 import           Control.Monad.Fix          (fix)
 import           Control.Monad.Morph        (hoist, lift)
@@ -35,28 +36,78 @@ import           Prelude                    hiding (mapM_)
 newtype CallId
     = CallId Integer deriving (Eq, Show, Hashable)
 
-data Config t t' = forall st. Config
+data Config t t' e = forall st. Config
     { configInit :: IO st
     , configTerm :: st -> IO ()
     , configSend :: st -> CallId -> t -> IO ()
-    , configRecv :: st -> IO (Response st t')
+    , configRecv :: st -> IO (Response st t' e)
     }
 
-data Response st t'
+data Response st t' e
     = Ok CallId t'
     | Retry CallId (Maybe st)
-    | LogError String
-    | Fatal String
+    | LogError e
+    | Fatal e
 
-data LogLevel
-    = Debug | Info | Warning | Error deriving (Eq, Ord, Show)
+data Level
+    = Debug | Info | Warning | Error
+      deriving (Eq, Ord, Show)
 
-data LogMessage
-    = LogMessage{ logLevel   :: LogLevel
-                , logSection :: String
-                , logMessage :: String
-                }
-      deriving Show
+data Component
+    = Main | Sender | Receiver
+      deriving (Eq, Show)
+
+data Log e
+    = Enqueued [CallId] Component
+    | Finished Component
+    | GotLock Component
+    | NoHandlerFound CallId
+    | ReleasedLock Component
+    | Retrying CallId
+    | RevertingState Component
+    | Sending CallId Component
+    | SystemError e Component
+    | Waiting Component
+      deriving (Eq, Show)
+
+logLevel :: Log e -> Level
+logLevel msg = case msg of
+    Enqueued _ _     -> Debug
+    Finished _       -> Info
+    GotLock _        -> Debug
+    NoHandlerFound _ -> Error
+    ReleasedLock _   -> Debug
+    Retrying _       -> Warning
+    RevertingState _ -> Warning
+    Sending _ _      -> Debug
+    SystemError _ _  -> Error
+    Waiting _        -> Debug
+
+logComponent :: Log e -> Component
+logComponent msg = case msg of
+    Enqueued _ comp     -> comp
+    Finished comp       -> comp
+    GotLock comp        -> comp
+    NoHandlerFound _    -> Receiver
+    ReleasedLock comp   -> comp
+    Retrying _          -> Receiver
+    RevertingState comp -> comp
+    Sending _ comp      -> comp
+    SystemError _ comp  -> comp
+    Waiting comp        -> comp
+
+logDescription :: (e -> String) -> Log e -> String
+logDescription showE msg = case msg of
+    Enqueued cids _    -> printf "enqueued %s" (show cids)
+    Finished _         -> "finished"
+    GotLock _          -> ">>>"
+    NoHandlerFound cid -> printf "no handler found! (%s)" (show cid)
+    ReleasedLock _     -> "<<<"
+    Retrying cid       -> printf "retrying %s..." (show cid)
+    RevertingState _   -> "reverting state"
+    Sending cid _      -> printf "sending %s..." (show cid)
+    SystemError e _    -> showE e
+    Waiting _          -> "waiting..."
 
 --
 -- HIGH LEVEL
@@ -158,19 +209,17 @@ llFindRequest cid = do
         Nothing -> return Nothing
         Just sr -> Just sr <$ put (st & llInFlight %~ Hash.delete cid)
 
-runHurtle :: Show e
-          => Config t t'                -- ^ Configuration
+runHurtle :: Config t t' e              -- ^ Configuration
           -> (a -> IO ())               -- ^ Final action for each input
-          -> (LogMessage -> IO ())      -- ^ Log handler
+          -> (Log e -> IO ())           -- ^ Log handler
           -> [i]                        -- ^ Initial values to enqueue
           -> (i -> Request t t' e i a)  -- ^ Action for each input
           -> IO ()
 runHurtle cfg finish logIt xs = runLL cfg finish logIt xs . runRequest
 
-runLL :: Show e
-      => Config t t'                -- ^ Configuration
+runLL :: Config t t' e              -- ^ Configuration
       -> (a -> IO ())               -- ^ Final action for each input
-      -> (LogMessage -> IO ())      -- ^ Log handler
+      -> (Log e -> IO ())           -- ^ Log handler
       -> [i]                        -- ^ Initial values to enqueue
       -> (i -> LL t t' e i a)       -- ^ Action for each input
       -> IO ()
@@ -181,49 +230,46 @@ runLL Config{..} finish logIt xs ll  = do
     begun <- STM.atomically newFlagPost
     done  <- STM.atomically newFlagPost
 
-    let withSt cat x = withStateV stateV logIt cat (x :: Maybe CallId)
-        debugL   = (logIt .) . LogMessage Debug
-        infoL    = (logIt .) . LogMessage Info
-        warningL = (logIt .) . LogMessage Warning
-        errorL   = (logIt .) . LogMessage Error
+    let withSt = withStateV stateV logIt
 
-    withSt "runLL.enqueue" Nothing $
+    withSt Main $
         forM_ xs $ \x -> do
             cid <- llEnqueue x
-            lift . debugL "runLL.enqueue" $ "enqueued " ++ show [cid]
+            lift . logIt $ Enqueued [cid] Main
 
     let doStep category cid (LL (FreeT m)) = do
             (resp, enqs) <- runWriterT (hoist lift m)
             cids <- mapM llEnqueue enqs
-            lift $ debugL category $ "enqueued " ++ show cids
+            lift . logIt $ Enqueued cids category
             case resp of
                 Pure x -> lift (finish x)
                 Free (LLF t kont) -> do
                     st <- use llState
+                    lift . logIt $ Sending cid category
                     lift (configSend st cid t)
                     llSent cid t (LL . kont)
                 Free (Throw e) ->
-                    lift $ errorL category (show e)
+                    lift . logIt $ SystemError e category
 
     -- Launch each enqueued chain.
     sender <- Async.async . fix $ \loop -> do
-        let category = "runLL.sender"
+        let category = Sender
             onDone = Nothing <$ waitFlagPost done
             getNext = do
                 (xM, state) <- runState llUnqueue <$> STM.takeTMVar stateV
                 maybe STM.retry (\x -> Just x <$ STM.putTMVar stateV state) xM
-        debugL category "waiting..."
+        logIt $ Waiting category
         next <- STM.atomically $ onDone <|> getNext
         case next of
-            Nothing -> infoL category "finished"
+            Nothing -> logIt $ Finished category
             Just (cid, x) -> do
-                withSt category (Just cid) $ doStep category cid (ll x)
+                withSt category $ doStep category cid (ll x)
                 STM.atomically $ flagPost begun
                 Conc.yield >> loop
 
     -- Receive a reply and run the next step of a chain.
     receiver <- Async.async . fix $ \loop -> do
-        let category = "runLL.receiver"
+        let category = Receiver
             onDone = Nothing <$ waitFlagPost done
             getState = do
                 waitFlagPost begun
@@ -236,44 +282,42 @@ runLL Config{..} finish logIt xs ll  = do
 
         stM <- STM.atomically $ onDone <|> getState
         case stM of
-            Nothing -> infoL category "finished"
+            Nothing -> logIt $ Finished category
             Just st -> do
-                let badHandler = "request handler not found!"
                 resp <- configRecv st
-                continue <- withSt category Nothing $ case resp of
+                continue <- withSt category $ case resp of
                     Ok cid t -> do
                         reqM <- llFindRequest cid
                         case reqM of
-                            Nothing -> lift $ errorL category badHandler
+                            Nothing -> lift . logIt $ NoHandlerFound cid
                             Just (SR kont _) -> doStep category cid (kont t)
                         return True
                     Retry cid stM' -> do
-                        lift $ warningL category ("retrying " ++ show cid)
+                        lift . logIt $ Retrying cid
                         mapM_ (llState .=) stM'
                         reqM <- llFindRequest cid
                         case reqM of
-                            Nothing -> lift $ errorL category badHandler
+                            Nothing -> lift . logIt $ NoHandlerFound cid
                             Just (SR kont t) -> llSent cid t kont
                         return True
-                    LogError msg ->
+                    LogError e ->
                         -- TODO: what else??
-                        True <$ lift (errorL category msg)
-                    Fatal msg ->
-                        False <$ lift (errorL category $ "FATAL: " ++ msg)
+                        True <$ lift (logIt $ SystemError e category)
+                    Fatal e ->
+                        False <$ lift (logIt $ SystemError e category)
                 when continue $
                     Conc.yield >> loop
 
     mapM_ Async.link [sender, receiver]
-    debugL "runLL" "waiting..."
+    logIt $ Waiting Main
     STM.atomically $ do
         waitFlagPost begun
         state <- STM.readTMVar stateV
         guard (Seq.null  (state ^. llQueue))
         guard (Hash.null (state ^. llInFlight))
         flagPost done
-    debugL "runLL" "stopping threads"
     mapM_ Async.wait [sender, receiver]
-    infoL "runLL" "finished"
+    logIt $ Finished Main
 
 
 --
@@ -291,20 +335,17 @@ flagPost (FlagPost v) = () <$ STM.tryPutTMVar v ()
 waitFlagPost :: FlagPost -> STM.STM ()
 waitFlagPost (FlagPost v) = STM.readTMVar v
 
-withStateV :: Show b
-           => STM.TMVar (LLState st t t' e i a)
-           -> (LogMessage -> IO ())      -- ^ Log handler
-           -> String -> Maybe b
+withStateV :: STM.TMVar (LLState st t t' e i a)
+           -> (Log e -> IO ())           -- ^ Log handler
+           -> Component
            -> StateT (LLState st t t' e i a) IO c -> IO c
-withStateV stateV logIt cat xM m = do
+withStateV stateV logIt cat m = do
     state <- STM.atomically $ STM.takeTMVar stateV
     let cleanup = do
-            logIt (LogMessage Warning cat "reverting state")
+            logIt $ RevertingState cat
             STM.atomically (STM.putTMVar stateV state)
     flip Exc.onException cleanup $ do
-        logIt . LogMessage Debug cat $
-            ">>>" ++ maybe "" (printf " (%s)" . show) xM
+        logIt $ GotLock cat
         (x, state') <- runStateT m state
-        logIt . LogMessage Debug cat $
-            "<<<" ++ maybe "" (printf " (%s)" . show) xM
+        logIt $ ReleasedLock cat
         x <$ STM.atomically (STM.putTMVar stateV state')
