@@ -45,20 +45,21 @@ main = do
     let setLevel   = Log.setLevel Log.DEBUG
         setHandler = Log.setHandlers [handler]
     Log.updateGlobalLogger Log.rootLoggerName (setLevel . setHandler)
-    let f x = do
-            sendInt x
-            when (x > 1) $
-                request (pred x) >> request (pred (pred x))
-            when (x == 1) $
-                request 0
-            return x
-        doneHandler x = Log.infoM "main" $ "result was " ++ show x
+
+    let doneHandler x = Log.infoM "main" $ "result was " ++ show x
         logHandler (LogMessage lvl section msg) = case lvl of
             Debug   -> Log.debugM section msg
             Info    -> Log.infoM section msg
             Warning -> Log.warningM section msg
             Error   -> Log.errorM section msg
 
-    runHurtle testConfig f [5] doneHandler logHandler
+    runHurtle testConfig doneHandler logHandler [5] $ \x -> do
+        sendInt x
+        when (x > 1) $
+            request (pred x) >> request (pred (pred x))
+        when (x == 1) $
+            request 0
+        return x
+
     Conc.threadDelay (10^(5::Int))
     Log.infoM "main" "DONE"

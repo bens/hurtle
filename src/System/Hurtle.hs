@@ -160,21 +160,21 @@ llFindRequest cid = do
 
 runHurtle :: Show e
           => Config t t'                -- ^ Configuration
-          -> (i -> Request t t' e i a)  -- ^ Action for each input
-          -> [i]                        -- ^ Initial values to enqueue
           -> (a -> IO ())               -- ^ Final action for each input
           -> (LogMessage -> IO ())      -- ^ Log handler
+          -> [i]                        -- ^ Initial values to enqueue
+          -> (i -> Request t t' e i a)  -- ^ Action for each input
           -> IO ()
-runHurtle cfg hl = runLL cfg (runRequest hl)
+runHurtle cfg finish logIt xs = runLL cfg finish logIt xs . runRequest
 
 runLL :: Show e
       => Config t t'                -- ^ Configuration
-      -> (i -> LL t t' e i a)       -- ^ Action for each input
-      -> [i]                        -- ^ Initial values to enqueue
       -> (a -> IO ())               -- ^ Final action for each input
       -> (LogMessage -> IO ())      -- ^ Log handler
+      -> [i]                        -- ^ Initial values to enqueue
+      -> (i -> LL t t' e i a)       -- ^ Action for each input
       -> IO ()
-runLL Config{..} ll xs finish logIt = do
+runLL Config{..} finish logIt xs ll  = do
     initialState <- configInit
     stateV <- STM.atomically $
         STM.newTMVar (LLState 0 initialState Seq.empty Hash.empty)
