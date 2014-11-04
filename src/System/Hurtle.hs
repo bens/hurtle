@@ -4,12 +4,12 @@
 {-# LANGUAGE TemplateHaskell            #-}
 
 module System.Hurtle
-  ( CallId, Config(..)
-  , Hurtle, Response(..)
+  ( Hurtle, runHurtle, makeCall, request
+    -- * Backends
+  , CallId, Config(..), Response(..)
+    -- * Logging
   , Log(..), Level(..), Component(..)
   , logDescription, logLevel, logComponent
-  , makeCall, request
-  , runHurtle
   ) where
 
 import           Control.Applicative
