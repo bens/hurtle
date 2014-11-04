@@ -15,7 +15,7 @@ import           System.Hurtle
 testConfig :: Config String String String
 testConfig = Config
   { configInit = STM.atomically (STM.newTVar HM.empty)
-  , configTerm = \_ -> return ()
+  , configTerm = \_ -> Log.debugM "testConfig.term" "finished"
   , configSend = \hash cid msg -> do
         Log.debugM "testConfig.send" $ show (cid, msg)
         STM.atomically $ STM.modifyTVar hash (HM.insert cid msg)

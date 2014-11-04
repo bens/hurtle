@@ -309,15 +309,19 @@ runLL Config{..} finish logIt xs ll  = do
                     Conc.yield >> loop
 
     mapM_ Async.link [sender, receiver]
-    logIt $ Waiting Main
-    STM.atomically $ do
-        waitFlagPost begun
-        state <- STM.readTMVar stateV
-        guard (Seq.null  (state ^. llQueue))
-        guard (Hash.null (state ^. llInFlight))
-        flagPost done
-    mapM_ Async.wait [sender, receiver]
-    logIt $ Finished Main
+    let cleanup = do
+            state <- STM.atomically (STM.readTMVar stateV)
+            configTerm (state ^. llState)
+    flip Exc.finally cleanup $ do
+        logIt $ Waiting Main
+        STM.atomically $ do
+            waitFlagPost begun
+            state <- STM.readTMVar stateV
+            guard (Seq.null  (state ^. llQueue))
+            guard (Hash.null (state ^. llInFlight))
+            flagPost done
+        mapM_ Async.wait [sender, receiver]
+        logIt $ Finished Main
 
 
 --
