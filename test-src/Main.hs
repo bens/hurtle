@@ -55,7 +55,7 @@ main = do
             where component = "Hurtle." ++ show (logComponent msg)
 
     runHurtle testConfig doneHandler logHandler [5] $ \x -> do
-        sendInt x
+        _ <- sendInt x
         when (x > 1) $
             request (pred x) >> request (pred (pred x))
         when (x == 1) $
