@@ -36,7 +36,7 @@ testConfig = Config
                 return $ Ok cid x
   }
 
-sendInt :: Int -> Request String String String i Int
+sendInt :: Int -> Hurtle String String String i Int
 sendInt = flip makeCall readEither . show
 
 main :: IO ()

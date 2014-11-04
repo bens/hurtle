@@ -5,7 +5,7 @@
 
 module System.Hurtle
   ( CallId, Config(..)
-  , Request, Response(..)
+  , Hurtle, Response(..)
   , Log(..), Level(..), Component(..)
   , logDescription, logLevel, logComponent
   , makeCall, request
@@ -113,28 +113,28 @@ logDescription showE msg = case msg of
 -- HIGH LEVEL
 --
 
-data RequestF t t' e i a
+data HurtleF t t' e i a
     = Enqueue i a
     | MakeCall t (t' -> Either e a)
 
--- | Initiate a new request.
-request :: i -> Request t t' e i ()
-request x = Request . liftF $ Enqueue x ()
+-- | Kick off a new request.
+request :: i -> Hurtle t t' e i ()
+request x = Hurtle . liftF $ Enqueue x ()
 
 -- | Make a remote call and give back the response when it arrives.
-makeCall :: t -> (t' -> Either e a) -> Request t t' e i a
-makeCall x = Request . liftF . MakeCall x
+makeCall :: t -> (t' -> Either e a) -> Hurtle t t' e i a
+makeCall x = Hurtle . liftF . MakeCall x
 
-instance Functor (RequestF t t' e i) where
+instance Functor (HurtleF t t' e i) where
     fmap f (Enqueue x k) = Enqueue x (f k)
     fmap f (MakeCall x k) = MakeCall x (fmap f . k)
 
-newtype Request t t' e i a
-    = Request{ unRequest :: Free (RequestF t t' e i) a }
+newtype Hurtle t t' e i a
+    = Hurtle{ unHurtle :: Free (HurtleF t t' e i) a }
       deriving (Functor, Applicative, Monad)
 
-runRequest :: (i -> Request t t' e i a) -> i -> LL t t' e i a
-runRequest r = LL . go . unRequest . r
+runRequest :: (i -> Hurtle t t' e i a) -> i -> LL t t' e i a
+runRequest r = LL . go . unHurtle . r
   where
     go (FreeT (Identity (Pure x))) = FreeT (return (Pure x))
     go (FreeT (Identity (Free (Enqueue x k)))) = FreeT $ do
@@ -213,7 +213,7 @@ runHurtle :: Config t t' e              -- ^ Configuration
           -> (a -> IO ())               -- ^ Final action for each input
           -> (Log e -> IO ())           -- ^ Log handler
           -> [i]                        -- ^ Initial values to enqueue
-          -> (i -> Request t t' e i a)  -- ^ Action for each input
+          -> (i -> Hurtle t t' e i a)   -- ^ Action for each input
           -> IO ()
 runHurtle cfg finish logIt xs = runLL cfg finish logIt xs . runRequest
 
