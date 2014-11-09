@@ -15,7 +15,10 @@ cabal-version: >=1.10
 library
   exposed-modules:
       System.Hurtle
-  -- other-extensions:
+  other-modules:
+      System.Hurtle.Common
+      System.Hurtle.LL
+      System.Hurtle.Log
   build-depends:
       base >=4.6 && <4.8
     , async
