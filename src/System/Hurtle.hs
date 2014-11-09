@@ -40,14 +40,11 @@ newtype Hurtle t t' e i a
 runRequest :: (i -> Hurtle t t' e i a) -> i -> LL t t' e i a
 runRequest r = LL . go . unHurtle . r
   where
-    go (FreeT (Identity (Pure x))) = FreeT (return (Pure x))
-    go (FreeT (Identity (Free (Enqueue x k)))) = FreeT $ do
-        tell [x]
-        runFreeT $ go k
-    go (FreeT (Identity (Free (MakeCall x k)))) = FreeT $
-        return (Free (LLF x (either goErr go . k)))
-      where
-        goErr = FreeT . return . Free . Throw
+    go m = FreeT $ case runFree m of
+        Pure x -> return (Pure x)
+        Free (Enqueue x k) -> tell [x] >> runFreeT (go k)
+        Free (MakeCall x k) -> return (Free (LLF x (either err go . k)))
+    err = FreeT . return . Free . Throw
 
 runHurtle :: Config t t' e              -- ^ Configuration
           -> (a -> IO ())               -- ^ Final action for each input
