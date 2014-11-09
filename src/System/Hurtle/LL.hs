@@ -1,5 +1,6 @@
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE RecordWildCards            #-}
+{-# LANGUAGE TemplateHaskell            #-}
 
 module System.Hurtle.LL (LLF(..), LL(..), runLL) where
 
@@ -11,6 +12,7 @@ import qualified Control.Exception          as Exc
 import           Control.Lens               hiding (Level, (<|))
 import           Control.Monad              (guard, when)
 import           Control.Monad.Fix          (fix)
+import           Control.Monad.IO.Class     (MonadIO (..))
 import           Control.Monad.Morph        (hoist, lift)
 import           Control.Monad.Trans.Free
 import           Control.Monad.Trans.State  hiding (state)
@@ -38,6 +40,7 @@ instance Functor (LLF t t' e) where
     fmap _ (Throw e) = Throw e
 
 newtype LL t t' e i a = LL (FreeT (LLF t t' e) (WriterT [i] IO) a)
+    deriving (Functor, Applicative, Monad, MonadIO)
 
 data LLState st t t' e i a = LLState
     { _llNextId   :: Integer
@@ -85,12 +88,11 @@ llFindRequest cid = do
         Just sr -> Just sr <$ put (st & llInFlight %~ Hash.delete cid)
 
 runLL :: Config t t' e              -- ^ Configuration
-      -> (a -> IO ())               -- ^ Final action for each input
       -> (Log e -> IO ())           -- ^ Log handler
       -> [i]                        -- ^ Initial values to enqueue
-      -> (i -> LL t t' e i a)       -- ^ Action for each input
+      -> (i -> LL t t' e i ())      -- ^ Action for each input
       -> IO ()
-runLL Config{..} finish logIt xs ll  = do
+runLL Config{..} logIt xs ll  = do
     initialState <- configInit
     stateV <- STM.atomically $
         STM.newTMVar (LLState 0 initialState Seq.empty Hash.empty)
@@ -109,7 +111,7 @@ runLL Config{..} finish logIt xs ll  = do
             cids <- mapM llEnqueue enqs
             lift . logIt $ Enqueued cids category
             case resp of
-                Pure x -> lift (finish x)
+                Pure () -> return ()
                 Free (LLF t kont) -> do
                     st <- use llState
                     lift . logIt $ Sending cid category

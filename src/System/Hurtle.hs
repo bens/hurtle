@@ -10,8 +10,10 @@ module System.Hurtle
 
 import           Control.Applicative
 import           Control.Lens               hiding (Level, (<|))
+import           Control.Monad              ((>=>))
+import           Control.Monad.IO.Class     (liftIO)
 import           Control.Monad.Trans.Free
-import           Control.Monad.Trans.Writer
+import           Control.Monad.Trans.Writer (tell)
 
 import           System.Hurtle.Common
 import           System.Hurtle.LL
@@ -52,4 +54,5 @@ runHurtle :: Config t t' e              -- ^ Configuration
           -> [i]                        -- ^ Initial values to enqueue
           -> (i -> Hurtle t t' e i a)   -- ^ Action for each input
           -> IO ()
-runHurtle cfg finish logIt xs = runLL cfg finish logIt xs . runRequest
+runHurtle cfg finish logIt xs f =
+    runLL cfg logIt xs (runRequest f >=> liftIO . finish)
