@@ -1,7 +1,6 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-
 module System.Hurtle
-  ( Hurtle, runHurtle, makeCall, request
+  ( RequestsT(..), request
+  , Hurtle, runHurtle, makeCall
     -- * Backends
   , module System.Hurtle.Common
     -- * Logging
@@ -9,44 +8,38 @@ module System.Hurtle
   ) where
 
 import           Control.Applicative
-import           Control.Lens               hiding (Level, (<|))
-import           Control.Monad              ((>=>))
-import           Control.Monad.IO.Class     (liftIO)
-import           Control.Monad.Trans.Free
-import           Control.Monad.Trans.Writer (tell)
+import           Control.Monad             (ap)
+import           Control.Monad.IO.Class    (liftIO)
+import           Control.Monad.Trans.Class (MonadTrans (..))
 
 import           System.Hurtle.Common
-import           System.Hurtle.LL
+import           System.Hurtle.LL          (LL)
+import qualified System.Hurtle.LL          as LL
 import           System.Hurtle.Log
 
-data HurtleF t t' e i a
-    = Enqueue i a
-    | MakeCall t (t' -> Either e a)
+newtype RequestsT i m a = RequestsT{ unRequestsT :: (i -> m ()) -> m a }
 
--- | Kick off a new request.
-request :: i -> Hurtle t t' e i ()
-request x = Hurtle . liftF $ Enqueue x ()
+instance Functor m => Functor (RequestsT i m) where
+    fmap f (RequestsT k) = RequestsT (fmap f . k)
 
--- | Make a remote call and give back the response when it arrives.
+instance (Functor m, Monad m) => Applicative (RequestsT i m) where
+    pure = return
+    (<*>) = ap
+
+instance (Functor m, Monad m) => Monad (RequestsT i m) where
+    return = lift . return
+    RequestsT k >>= f = RequestsT $ \m -> k m >>= \x -> unRequestsT (f x) m
+
+instance MonadTrans (RequestsT i) where
+    lift = RequestsT . const
+
+request :: LL.Forkable m => i -> RequestsT i m ()
+request i = RequestsT $ \f -> LL.fork (f i)
+
+type Hurtle t t' e i = RequestsT i (LL t t' e)
+
 makeCall :: t -> (t' -> Either e a) -> Hurtle t t' e i a
-makeCall x = Hurtle . liftF . MakeCall x
-
-instance Functor (HurtleF t t' e i) where
-    fmap f (Enqueue x k) = Enqueue x (f k)
-    fmap f (MakeCall x k) = MakeCall x (fmap f . k)
-
-newtype Hurtle t t' e i a
-    = Hurtle{ unHurtle :: Free (HurtleF t t' e i) a }
-      deriving (Functor, Applicative, Monad)
-
-runRequest :: (i -> Hurtle t t' e i a) -> i -> LL t t' e i a
-runRequest r = LL . go . unHurtle . r
-  where
-    go m = FreeT $ case runFree m of
-        Pure x -> return (Pure x)
-        Free (Enqueue x k) -> tell [x] >> runFreeT (go k)
-        Free (MakeCall x k) -> return (Free (LLF x (either err go . k)))
-    err = FreeT . return . Free . Throw
+makeCall x k = lift $ LL.makeCall x (fmap return . k)
 
 runHurtle :: Config t t' e              -- ^ Configuration
           -> (a -> IO ())               -- ^ Final action for each input
@@ -54,5 +47,7 @@ runHurtle :: Config t t' e              -- ^ Configuration
           -> [i]                        -- ^ Initial values to enqueue
           -> (i -> Hurtle t t' e i a)   -- ^ Action for each input
           -> IO ()
-runHurtle cfg finish logIt xs f =
-    runLL cfg logIt xs (runRequest f >=> liftIO . finish)
+runHurtle cfg finish logIt xs f = do
+    let f' x = unRequestsT (f x >>= (lift . liftIO . finish)) f'
+        start = lift $ mapM_ (LL.fork . f') xs
+    LL.runLL cfg logIt $ unRequestsT start f'
