@@ -9,7 +9,7 @@ module System.Hurtle
 
 import           Control.Applicative
 import           Control.Monad             (ap)
-import           Control.Monad.IO.Class    (liftIO)
+import           Control.Monad.IO.Class    (MonadIO (..))
 import           Control.Monad.Trans.Class (MonadTrans (..))
 
 import           System.Hurtle.Common
@@ -32,6 +32,9 @@ instance (Functor m, Monad m) => Monad (RequestsT i m) where
 
 instance MonadTrans (RequestsT i) where
     lift = RequestsT . const
+
+instance (Functor m, MonadIO m) => MonadIO (RequestsT i m) where
+    liftIO = lift . liftIO
 
 request :: LL.Forkable m => i -> RequestsT i m ()
 request i = RequestsT $ \f -> LL.fork (f i)
