@@ -4,63 +4,44 @@ import           System.Hurtle.Common
 import           Text.Printf
 
 data Log e
-    = Enqueued [CallId] Component
-    | Finished Component
-    | GotLock Component
+    = Enqueued [CallId]
+    | Finished
+    | GotLock
     | NoHandlerFound CallId
-    | ReleasedLock Component
+    | ReleasedLock
     | Retrying CallId
-    | RevertingState Component
-    | Sending CallId Component
-    | SystemError e Component
-    | Waiting Component
+    | RevertingState
+    | Sending CallId
+    | SystemError e
+    | Waiting
       deriving (Eq, Show)
 
 data Level
     = Debug | Info | Warning | Error
       deriving (Eq, Ord, Show)
 
--- | Hurtle is implemented with two worker threads, the 'Sender' and 'Receiver'.
--- Adding this bit of data to logs clears up which has got what lock when.
-data Component
-    = Main | Sender | Receiver
-      deriving (Eq, Show)
-
 logLevel :: Log e -> Level
 logLevel msg = case msg of
-    Enqueued _ _     -> Debug
-    Finished _       -> Info
-    GotLock _        -> Debug
+    Enqueued _       -> Debug
+    Finished         -> Info
+    GotLock          -> Debug
     NoHandlerFound _ -> Error
-    ReleasedLock _   -> Debug
+    ReleasedLock     -> Debug
     Retrying _       -> Warning
-    RevertingState _ -> Warning
-    Sending _ _      -> Debug
-    SystemError _ _  -> Error
-    Waiting _        -> Debug
-
-logComponent :: Log e -> Component
-logComponent msg = case msg of
-    Enqueued _ comp     -> comp
-    Finished comp       -> comp
-    GotLock comp        -> comp
-    NoHandlerFound _    -> Receiver
-    ReleasedLock comp   -> comp
-    Retrying _          -> Receiver
-    RevertingState comp -> comp
-    Sending _ comp      -> comp
-    SystemError _ comp  -> comp
-    Waiting comp        -> comp
+    RevertingState   -> Warning
+    Sending _        -> Debug
+    SystemError _    -> Error
+    Waiting          -> Debug
 
 logDescription :: (e -> String) -> Log e -> String
 logDescription showE msg = case msg of
-    Enqueued cids _    -> printf "enqueued %s" (show cids)
-    Finished _         -> "finished"
-    GotLock _          -> ">>>"
+    Enqueued cids      -> printf "enqueued %s" (show cids)
+    Finished           -> "finished"
+    GotLock            -> ">>>"
     NoHandlerFound cid -> printf "no handler found! (%s)" (show cid)
-    ReleasedLock _     -> "<<<"
+    ReleasedLock       -> "<<<"
     Retrying cid       -> printf "retrying %s..." (show cid)
-    RevertingState _   -> "reverting state"
-    Sending cid _      -> printf "sending %s..." (show cid)
-    SystemError e _    -> showE e
-    Waiting _          -> "waiting..."
+    RevertingState     -> "reverting state"
+    Sending cid        -> printf "sending %s..." (show cid)
+    SystemError e      -> showE e
+    Waiting            -> "waiting..."

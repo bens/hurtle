@@ -6,28 +6,22 @@ module System.Hurtle.LL (Forkable(..), LL, runLL, makeCall) where
 
 import           Control.Applicative
 import qualified Control.Concurrent         as Conc
-import qualified Control.Concurrent.Async   as Async
-import qualified Control.Concurrent.STM     as STM
-import qualified Control.Exception          as Exc
 import           Control.Lens               hiding (Level, (<|))
-import           Control.Monad              (guard, when)
 import           Control.Monad.Fix          (fix)
 import           Control.Monad.IO.Class     (MonadIO (..))
 import           Control.Monad.Morph        (hoist, lift)
 import           Control.Monad.Trans.Free
 import           Control.Monad.Trans.State  hiding (state)
 import           Control.Monad.Trans.Writer
-import           Data.Foldable              (mapM_)
+import           Data.Foldable              (forM_, mapM_)
 import qualified Data.HashMap.Strict        as Hash
-import           Data.Sequence              (ViewR (..), (<|))
-import qualified Data.Sequence              as Seq
+import           Pipes                      ((>->))
+import qualified Pipes                      as P
 
 import           Prelude                    hiding (mapM_)
 
 import           System.Hurtle.Common
 import           System.Hurtle.Log
-
-data Queued a = Queued CallId a
 
 data SomeRequest t t' e = SR (t' -> LL t t' e ()) t
 
@@ -46,7 +40,6 @@ newtype LL t t' e a =
 data LLState st t t' e = LLState
     { _llNextId   :: Integer
     , _llState    :: st
-    , _llQueue    :: Seq.Seq (Queued (LL t t' e ()))
     , _llInFlight :: Hash.HashMap CallId (SomeRequest t t' e)
     }
 makeLenses ''LLState
@@ -55,24 +48,6 @@ makeCall :: t -> (t' -> Either e (LL t t' e a)) -> LL t t' e a
 makeCall x k = LL . FreeT . return . Free $ LLF x (either err unLL . k)
   where
     err = FreeT . return . Free . Throw
-
--- Spawn a new concurrent thread.
-llFork :: (Functor m, Monad m)
-       => LL t t' e () -> StateT (LLState st t t' e) m CallId
-llFork x = do
-    st <- get
-    let st' = st & llNextId +~ 1
-                 & llQueue  %~ (Queued (CallId (st ^. llNextId)) x <|)
-    CallId (st ^. llNextId) <$ put st'
-
--- Pull the next fresh action from the queue.
-llUnqueue :: (Functor m, Monad m)
-          => StateT (LLState st t t' e) m (Maybe (CallId, LL t t' e ()))
-llUnqueue = do
-    st <- get
-    case Seq.viewr (st ^. llQueue) of
-        EmptyR -> return Nothing
-        queue :> Queued cid x -> Just (cid, x) <$ put (st & llQueue .~ queue)
 
 -- Mark a request as being sent.
 llSent :: (Functor m, Monad m)
@@ -96,134 +71,55 @@ runLL :: Config t t' e     -- ^ Configuration
       -> (Log e -> IO ())  -- ^ Log handler
       -> LL t t' e ()
       -> IO ()
-runLL Config{..} logIt ll  = do
-    initialState <- configInit
-    stateV <- STM.atomically $
-        STM.newTMVar (LLState 0 initialState Seq.empty Hash.empty)
-    begun <- STM.atomically newFlagPost
-    done  <- STM.atomically newFlagPost
+runLL Config{..} logIt ll = do
+    initialSt <- configInit
+    let initialState = LLState 0 initialSt Hash.empty
 
-    let withSt = withStateV stateV logIt
+        starter = P.await >>= go >> starter
+          where
+            go (cidM, m) = do
+                cid <- maybe (lift $ CallId <$> (llNextId <<+= 1)) return cidM
+                go' (cid, m)
+            go' (cid, LL (FreeT m)) = do
+                liftIO . logIt $ GotLock
+                (resp, forks) <- runWriterT (hoist (lift . lift) m)
+                case resp of
+                    Pure () -> forM_ forks $ \m' -> go (Nothing, m')
+                    Free (Throw e) -> liftIO . logIt $ SystemError e
+                    Free (LLF t k) -> do
+                        st  <- lift $ use llState
+                        lift   $ llInFlight %= Hash.insert cid (SR (LL . k) t)
+                        liftIO $ configSend st cid t
+                        forM_ forks $ \m' -> go (Nothing, m')
+                liftIO . logIt $ ReleasedLock
 
-    withSt Main $ do
-        cid <- llFork ll
-        lift . logIt $ Enqueued [cid] Main
-
-    let doStep category cid (LL (FreeT m)) = do
-            (resp, enqs) <- runWriterT (hoist lift m)
-            cids <- mapM llFork enqs
-            lift . logIt $ Enqueued cids category
+        receiver = fix $ \loop -> do
+            st   <- lift $ use llState
+            resp <- liftIO $ configRecv st
             case resp of
-                Pure () -> return ()
-                Free (LLF t kont) -> do
-                    st <- use llState
-                    lift . logIt $ Sending cid category
-                    lift (configSend st cid t)
-                    llSent cid t (LL . kont)
-                Free (Throw e) ->
-                    lift . logIt $ SystemError e category
+                Ok cid t' -> do
+                    reqM <- lift $ llFindRequest cid
+                    case reqM of
+                        Nothing -> liftIO . logIt $ NoHandlerFound cid
+                        Just (SR k _) -> P.yield (Just cid, k t') >> loop
+                Retry cid stM -> do
+                    liftIO . logIt $ Retrying cid
+                    lift $ mapM_ (llState .=) stM
+                    reqM <- lift $ llFindRequest cid
+                    case reqM of
+                        Nothing -> liftIO . logIt $ NoHandlerFound cid
+                        Just (SR k t) -> lift $ llSent cid t k
+                    loop
+                LogError e -> do
+                    liftIO . logIt $ SystemError e
+                    loop
+                Fatal e ->
+                    liftIO . logIt $ SystemError e
 
-    -- Launch each enqueued chain.
-    sender <- Async.async . fix $ \loop -> do
-        let category = Sender
-            onDone = Nothing <$ waitFlagPost done
-            getNext = do
-                (xM, state) <- runState llUnqueue <$> STM.takeTMVar stateV
-                maybe STM.retry (\x -> Just x <$ STM.putTMVar stateV state) xM
-        logIt $ Waiting category
-        next <- STM.atomically $ onDone <|> getNext
-        case next of
-            Nothing -> logIt $ Finished category
-            Just (cid, m) -> do
-                withSt category $ doStep category cid m
-                STM.atomically $ flagPost begun
-                Conc.yield >> loop
+        program = (P.yield (Nothing, ll) >> receiver) >-> starter
 
-    -- Receive a reply and run the next step of a chain.
-    receiver <- Async.async . fix $ \loop -> do
-        let category = Receiver
-            onDone = Nothing <$ waitFlagPost done
-            getState = do
-                waitFlagPost begun
-                state <- STM.readTMVar stateV
-                let inFlight = state ^. llInFlight
-                    queue    = state ^. llQueue
-                if Hash.null inFlight && not (Seq.null queue)
-                    then STM.retry
-                    else return (Just (state ^. llState))
-        stM <- STM.atomically $ onDone <|> getState
-        case stM of
-            Nothing -> logIt $ Finished category
-            Just st -> do
-                resp <- configRecv st
-                continue <- withSt category $ case resp of
-                    Ok cid t -> do
-                        reqM <- llFindRequest cid
-                        case reqM of
-                            Nothing -> lift . logIt $ NoHandlerFound cid
-                            Just (SR kont _) -> doStep category cid (kont t)
-                        return True
-                    Retry cid stM' -> do
-                        lift . logIt $ Retrying cid
-                        mapM_ (llState .=) stM'
-                        reqM <- llFindRequest cid
-                        case reqM of
-                            Nothing -> lift . logIt $ NoHandlerFound cid
-                            Just (SR kont t) -> llSent cid t kont
-                        return True
-                    LogError e ->
-                        -- TODO: what else??
-                        True <$ lift (logIt $ SystemError e category)
-                    Fatal e ->
-                        False <$ lift (logIt $ SystemError e category)
-                when continue $
-                    Conc.yield >> loop
-
-    mapM_ Async.link [sender, receiver]
-    let cleanup = do
-            state <- STM.atomically (STM.readTMVar stateV)
-            configTerm (state ^. llState)
-    flip Exc.finally cleanup $ do
-        logIt $ Waiting Main
-        STM.atomically $ do
-            waitFlagPost begun
-            state <- STM.readTMVar stateV
-            guard (Seq.null  (state ^. llQueue))
-            guard (Hash.null (state ^. llInFlight))
-            flagPost done
-        mapM_ Async.wait [sender, receiver]
-        logIt $ Finished Main
-
-
---
--- UTILITIES
---
-
-newtype FlagPost = FlagPost (STM.TMVar ())
-
-newFlagPost :: STM.STM FlagPost
-newFlagPost = FlagPost <$> STM.newEmptyTMVar
-
-flagPost :: FlagPost -> STM.STM ()
-flagPost (FlagPost v) = () <$ STM.tryPutTMVar v ()
-
-waitFlagPost :: FlagPost -> STM.STM ()
-waitFlagPost (FlagPost v) = STM.readTMVar v
-
-withStateV :: STM.TMVar (LLState st t t' e)
-           -> (Log e -> IO ())           -- ^ Log handler
-           -> Component
-           -> StateT (LLState st t t' e) IO c -> IO c
-withStateV stateV logIt cat m = do
-    state <- STM.atomically $ STM.takeTMVar stateV
-    let cleanup = do
-            logIt $ RevertingState cat
-            STM.atomically (STM.putTMVar stateV state)
-    flip Exc.onException cleanup $ do
-        logIt $ GotLock cat
-        (x, state') <- runStateT m state
-        logIt $ ReleasedLock cat
-        x <$ STM.atomically (STM.putTMVar stateV state')
+    finalState <- execStateT (P.runEffect program) initialState
+    liftIO $ configTerm (finalState ^. llState)
 
 --
 -- Forkable

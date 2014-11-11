@@ -52,7 +52,7 @@ main = do
             Info    -> Log.infoM    component (logDescription ("ERR: "++) msg)
             Warning -> Log.warningM component (logDescription ("ERR: "++) msg)
             Error   -> Log.errorM   component (logDescription ("ERR: "++) msg)
-            where component = "Hurtle." ++ show (logComponent msg)
+            where component = "Hurtle"
 
     runHurtle testConfig doneHandler logHandler [5] $ \x -> do
         _ <- sendInt x
