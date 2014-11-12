@@ -23,7 +23,6 @@ library
       base >=4.6 && <4.8
     , free
     , hashable
-    , lens
     , mmorph
     , pipes
     , transformers

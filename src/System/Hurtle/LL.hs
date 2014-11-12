@@ -1,12 +1,10 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards            #-}
-{-# LANGUAGE TemplateHaskell            #-}
 
 module System.Hurtle.LL (Forkable(..), LLT, runLL, makeCall) where
 
 import           Control.Applicative
 import qualified Control.Concurrent         as Conc
-import           Control.Lens               hiding (Level, (<|))
 import           Control.Monad              (liftM)
 import           Control.Monad.Fix          (fix)
 import           Control.Monad.IO.Class     (MonadIO (..))
@@ -47,7 +45,6 @@ data LLState st t t' e m = LLState
     , _llState    :: st
     , _llInFlight :: Hash.HashMap CallId (SomeRequest t t' e m)
     }
-makeLenses ''LLState
 
 makeCall :: Monad m
          => t -> (t' -> Either e (LLT t t' e m a)) -> LLT t t' e m a
@@ -59,8 +56,13 @@ makeCall x k = LLT . FreeT . return . Free $ LLF x (either err unLL . k)
 llFindRequest :: (Functor m, Monad m)
               => CallId
               -> StateT (LLState st t t' e m) m (Maybe (SomeRequest t t' e m))
-llFindRequest cid = use (llInFlight . at cid) >>=
-    maybe (return Nothing) (\sr -> Just sr <$ (llInFlight . at cid .= Nothing))
+llFindRequest cid = do
+    st <- get
+    case Hash.lookup cid (_llInFlight st) of
+        Nothing -> return Nothing
+        Just sr -> Just sr <$ put st{
+            _llInFlight = Hash.delete cid (_llInFlight st)
+            }
 
 runLL :: (Functor m, Monad m)
       => Config t t' e m   -- ^ Configuration
@@ -73,8 +75,11 @@ runLL Config{..} logIt ll = do
 
         starter = P.await >>= go >> starter
           where
+            nextId = do
+                st <- get
+                CallId (_llNextId st) <$ put st{ _llNextId = _llNextId st + 1 }
             go (cidM, m) = do
-                cid <- maybe (lift $ CallId <$> (llNextId <<+= 1)) return cidM
+                cid <- maybe (lift nextId) return cidM
                 go' (cid, m)
             go' (cid, LLT (FreeT m)) = do
                 lift . lift . logIt $ GotLock
@@ -83,17 +88,19 @@ runLL Config{..} logIt ll = do
                     Pure () -> forM_ forks $ \m' -> go (Nothing, m')
                     Free (Throw e) -> lift . lift . logIt $ SystemError e
                     Free (LLF t k) -> do
-                        st  <- lift $ use llState
-                        lift $ llInFlight . at cid ?= SR (LLT . k) t
+                        lift . modify $ \s -> s{
+                            _llInFlight =
+                                Hash.insert cid (SR (LLT . k) t) (_llInFlight s)
+                            }
                         lift . lift . logIt $ Sending cid
+                        st <- lift $ gets _llState
                         lift . lift $ configSend st cid t
                         forM_ forks $ \m' -> go (Nothing, m')
                 lift . lift . logIt $ ReleasedLock
 
         receiver = fix $ \loop -> do
             lift . lift . logIt $ Waiting
-            st   <- lift $ use llState
-            resp <- lift . lift $ configRecv st
+            resp <- lift (gets _llState >>= lift . configRecv)
             case resp of
                 Ok cid t' -> do
                     reqM <- lift $ llFindRequest cid
@@ -102,11 +109,13 @@ runLL Config{..} logIt ll = do
                         Just (SR k _) -> P.yield (Just cid, k t') >> loop
                 Retry cid stM -> do
                     lift . lift . logIt $ Retrying cid
-                    lift $ mapM_ (llState .=) stM
+                    lift $ mapM_ (\x -> modify $ \s -> s{ _llState = x }) stM
                     reqM <- lift $ llFindRequest cid
                     case reqM of
                         Nothing -> lift . lift . logIt $ NoHandlerFound cid
-                        Just sr -> lift $ llInFlight . at cid ?= sr
+                        Just sr -> lift . modify $ \st -> st{
+                            _llInFlight = Hash.insert cid sr (_llInFlight st)
+                            }
                     loop
                 LogError e -> do
                     lift . lift . logIt $ SystemError e
@@ -117,7 +126,7 @@ runLL Config{..} logIt ll = do
         program = (P.yield (Nothing, ll) >> receiver) >-> starter
 
     finalState <- execStateT (P.runEffect program) initialState
-    configTerm (finalState ^. llState)
+    configTerm (_llState finalState)
     logIt Finished
 
 --
