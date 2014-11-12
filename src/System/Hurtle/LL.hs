@@ -96,12 +96,14 @@ runLL Config{..} logIt ll = do
                     Free (LLF t k) -> do
                         st  <- lift $ use llState
                         lift $ llInFlight %= Hash.insert cid (SR (LLT . k) t)
+                        lift . lift . logIt $ Sending cid
                         lift . lift $ configSend st cid t
                         forM_ forks $ \m' -> go (Nothing, m')
                 lift . lift . logIt $ ReleasedLock
 
 
         receiver = fix $ \loop -> do
+            lift . lift . logIt $ Waiting
             st   <- lift $ use llState
             resp <- lift . lift $ configRecv st
             case resp of
@@ -128,6 +130,7 @@ runLL Config{..} logIt ll = do
 
     finalState <- execStateT (P.runEffect program) initialState
     configTerm (finalState ^. llState)
+    logIt Finished
 
 --
 -- Forkable
