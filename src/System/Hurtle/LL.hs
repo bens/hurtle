@@ -55,23 +55,12 @@ makeCall x k = LLT . FreeT . return . Free $ LLF x (either err unLL . k)
   where
     err = FreeT . return . Free . Throw
 
--- Mark a request as being sent.
-llSent :: (Functor m, Monad m)
-       => CallId -> t -> (t' -> LLT t t' e m ())
-       -> StateT (LLState st t t' e m) m ()
-llSent cid t f = do
-    st <- get
-    put $ st & llInFlight %~ Hash.insert cid (SR f t)
-
 -- Find a request and remove it from the in-flight set.
 llFindRequest :: (Functor m, Monad m)
               => CallId
               -> StateT (LLState st t t' e m) m (Maybe (SomeRequest t t' e m))
-llFindRequest cid = do
-    st <- get
-    case st ^. llInFlight . at cid of
-        Nothing -> return Nothing
-        Just sr -> Just sr <$ put (st & llInFlight %~ Hash.delete cid)
+llFindRequest cid = use (llInFlight . at cid) >>=
+    maybe (return Nothing) (\sr -> Just sr <$ (llInFlight . at cid .= Nothing))
 
 runLL :: (Functor m, Monad m)
       => Config t t' e m   -- ^ Configuration
@@ -95,12 +84,11 @@ runLL Config{..} logIt ll = do
                     Free (Throw e) -> lift . lift . logIt $ SystemError e
                     Free (LLF t k) -> do
                         st  <- lift $ use llState
-                        lift $ llInFlight %= Hash.insert cid (SR (LLT . k) t)
+                        lift $ llInFlight . at cid ?= SR (LLT . k) t
                         lift . lift . logIt $ Sending cid
                         lift . lift $ configSend st cid t
                         forM_ forks $ \m' -> go (Nothing, m')
                 lift . lift . logIt $ ReleasedLock
-
 
         receiver = fix $ \loop -> do
             lift . lift . logIt $ Waiting
@@ -118,7 +106,7 @@ runLL Config{..} logIt ll = do
                     reqM <- lift $ llFindRequest cid
                     case reqM of
                         Nothing -> lift . lift . logIt $ NoHandlerFound cid
-                        Just (SR k t) -> lift $ llSent cid t k
+                        Just sr -> lift $ llInFlight . at cid ?= sr
                     loop
                 LogError e -> do
                     lift . lift . logIt $ SystemError e
