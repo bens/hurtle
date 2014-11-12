@@ -12,7 +12,7 @@ import           Text.Read                 (readEither)
 
 import           System.Hurtle
 
-testConfig :: Config String String String
+testConfig :: Config String String String IO
 testConfig = Config
   { configInit = STM.atomically (STM.newTVar HM.empty)
   , configTerm = \_ -> Log.debugM "testConfig.term" "finished"
@@ -36,7 +36,7 @@ testConfig = Config
                 return $ Ok cid x
   }
 
-sendInt :: Int -> Hurtle String String String i Int
+sendInt :: Int -> Hurtle String String String i IO Int
 sendInt = flip makeCall readEither . show
 
 main :: IO ()
