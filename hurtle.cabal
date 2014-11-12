@@ -21,14 +21,11 @@ library
       System.Hurtle.Log
   build-depends:
       base >=4.6 && <4.8
-    , async
-    , containers
     , free
     , hashable
     , lens
     , mmorph
     , pipes
-    , stm
     , transformers
     , unordered-containers
   ghc-options:      -Wall
