@@ -14,7 +14,7 @@ import           Control.Monad.Trans.Free
 import           Control.Monad.Trans.State  hiding (state)
 import           Control.Monad.Trans.Writer
 import           Data.Foldable              (forM_, mapM_)
-import qualified Data.HashMap.Strict        as Hash
+import qualified Data.IntMap                as IM
 import           Pipes                      ((>->))
 import qualified Pipes                      as P
 
@@ -41,9 +41,9 @@ instance MonadTrans (LLT t t' e) where
     lift = LLT . FreeT . lift . liftM Pure
 
 data LLState st t t' e m = LLState
-    { _llNextId   :: Integer
+    { _llNextId   :: Int
     , _llState    :: st
-    , _llInFlight :: Hash.HashMap CallId (SomeRequest t t' e m)
+    , _llInFlight :: IM.IntMap (SomeRequest t t' e m)
     }
 
 makeCall :: Monad m
@@ -56,12 +56,12 @@ makeCall x k = LLT . FreeT . return . Free $ LLF x (either err unLL . k)
 llFindRequest :: (Functor m, Monad m)
               => CallId
               -> StateT (LLState st t t' e m) m (Maybe (SomeRequest t t' e m))
-llFindRequest cid = do
+llFindRequest (CallId cid) = do
     st <- get
-    case Hash.lookup cid (_llInFlight st) of
+    case IM.lookup cid (_llInFlight st) of
         Nothing -> return Nothing
         Just sr -> Just sr <$ put st{
-            _llInFlight = Hash.delete cid (_llInFlight st)
+            _llInFlight = IM.delete cid (_llInFlight st)
             }
 
 runLL :: (Functor m, Monad m)
@@ -71,13 +71,13 @@ runLL :: (Functor m, Monad m)
       -> m ()
 runLL Config{..} logIt ll = do
     initialSt <- configInit
-    let initialState = LLState 0 initialSt Hash.empty
+    let initialState = LLState 0 initialSt IM.empty
 
         starter = P.await >>= go >> starter
           where
             nextId = do
                 st <- get
-                CallId (_llNextId st) <$ put st{ _llNextId = _llNextId st + 1 }
+                _llNextId st <$ put st{ _llNextId = _llNextId st + 1 }
             go (cidM, m) = do
                 cid <- maybe (lift nextId) return cidM
                 go' (cid, m)
@@ -90,11 +90,11 @@ runLL Config{..} logIt ll = do
                     Free (LLF t k) -> do
                         lift . modify $ \s -> s{
                             _llInFlight =
-                                Hash.insert cid (SR (LLT . k) t) (_llInFlight s)
+                                IM.insert cid (SR (LLT . k) t) (_llInFlight s)
                             }
-                        lift . lift . logIt $ Sending cid
+                        lift . lift . logIt $ Sending (CallId cid)
                         st <- lift $ gets _llState
-                        lift . lift $ configSend st cid t
+                        lift . lift $ configSend st (CallId cid) t
                         forM_ forks $ \m' -> go (Nothing, m')
                 lift . lift . logIt $ ReleasedLock
 
@@ -102,19 +102,22 @@ runLL Config{..} logIt ll = do
             lift . lift . logIt $ Waiting
             resp <- lift (gets _llState >>= lift . configRecv)
             case resp of
-                Ok cid t' -> do
-                    reqM <- lift $ llFindRequest cid
+                Ok (CallId cid) t' -> do
+                    reqM <- lift $ llFindRequest (CallId cid)
                     case reqM of
-                        Nothing -> lift . lift . logIt $ NoHandlerFound cid
-                        Just (SR k _) -> P.yield (Just cid, k t') >> loop
-                Retry cid stM -> do
-                    lift . lift . logIt $ Retrying cid
+                        Nothing ->
+                            lift . lift . logIt $ NoHandlerFound (CallId cid)
+                        Just (SR k _) ->
+                            P.yield (Just cid, k t') >> loop
+                Retry (CallId cid) stM -> do
+                    lift . lift . logIt $ Retrying (CallId cid)
                     lift $ mapM_ (\x -> modify $ \s -> s{ _llState = x }) stM
-                    reqM <- lift $ llFindRequest cid
+                    reqM <- lift $ llFindRequest (CallId cid)
                     case reqM of
-                        Nothing -> lift . lift . logIt $ NoHandlerFound cid
+                        Nothing ->
+                            lift . lift . logIt $ NoHandlerFound (CallId cid)
                         Just sr -> lift . modify $ \st -> st{
-                            _llInFlight = Hash.insert cid sr (_llInFlight st)
+                            _llInFlight = IM.insert cid sr (_llInFlight st)
                             }
                     loop
                 LogError e -> do

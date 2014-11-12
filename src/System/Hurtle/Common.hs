@@ -6,7 +6,7 @@ module System.Hurtle.Common where
 import           Data.Hashable (Hashable)
 
 newtype CallId
-    = CallId Integer deriving (Eq, Show, Hashable)
+    = CallId Int deriving (Eq, Show, Hashable)
 
 data Config t t' e m = forall st. Config
     { configInit :: m st
