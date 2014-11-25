@@ -73,19 +73,18 @@ runLL Config{..} logIt ll = do
     initialSt <- configInit
     let initialState = LLState 0 initialSt IM.empty
 
+        nextId = do
+            st <- get
+            _llNextId st <$ put st{ _llNextId = _llNextId st + 1 }
         starter = P.await >>= go >> starter
           where
-            nextId = do
-                st <- get
-                _llNextId st <$ put st{ _llNextId = _llNextId st + 1 }
-            go (cidM, m) = do
-                cid <- maybe (lift nextId) return cidM
-                go' (cid, m)
-            go' (cid, LLT (FreeT m)) = do
+            go (cid, LLT (FreeT m)) = do
                 lift . lift . logIt $ GotLock
                 (resp, forks) <- runWriterT (hoist (lift . lift) m)
                 case resp of
-                    Pure () -> forM_ forks $ \m' -> go (Nothing, m')
+                    Pure () -> forM_ forks $ \m' -> do
+                        cid' <- lift nextId
+                        go (cid', m')
                     Free (Throw e) -> lift . lift . logIt $ SystemError e
                     Free (LLF t k) -> do
                         lift . modify $ \s -> s{
@@ -95,7 +94,9 @@ runLL Config{..} logIt ll = do
                         lift . lift . logIt $ Sending (CallId cid)
                         st <- lift $ gets _llState
                         lift . lift $ configSend st (CallId cid) t
-                        forM_ forks $ \m' -> go (Nothing, m')
+                        forM_ forks $ \m' -> do
+                            cid' <- lift nextId
+                            go (cid', m')
                 lift . lift . logIt $ ReleasedLock
 
         receiver = fix $ \loop -> do
@@ -108,7 +109,7 @@ runLL Config{..} logIt ll = do
                         Nothing ->
                             lift . lift . logIt $ NoHandlerFound (CallId cid)
                         Just (SR k _) ->
-                            P.yield (Just cid, k t') >> loop
+                            P.yield (cid, k t') >> loop
                 Retry (CallId cid) stM -> do
                     lift . lift . logIt $ Retrying (CallId cid)
                     lift $ mapM_ (\x -> modify $ \s -> s{ _llState = x }) stM
@@ -126,7 +127,11 @@ runLL Config{..} logIt ll = do
                 Fatal e ->
                     lift . lift . logIt $ SystemError e
 
-        program = (P.yield (Nothing, ll) >> receiver) >-> starter
+        initProgram = do
+            cid <- lift nextId
+            P.yield (cid, ll)
+            receiver
+        program = initProgram >-> starter
 
     finalState <- execStateT (P.runEffect program) initialState
     configTerm (_llState finalState)
