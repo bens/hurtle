@@ -15,10 +15,14 @@ cabal-version: >=1.10
 library
   exposed-modules:
       System.Hurtle
+      System.Hurtle.Conc
   other-modules:
       System.Hurtle.Common
       System.Hurtle.LL
       System.Hurtle.Log
+      System.Hurtle.TypedStore
+      System.Hurtle.TypedStore2
+      System.Hurtle.Types
   build-depends:
       base >=4.6 && <4.8
     , containers

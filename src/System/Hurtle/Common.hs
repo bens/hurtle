@@ -1,9 +1,13 @@
 {-# LANGUAGE ExistentialQuantification  #-}
+{-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module System.Hurtle.Common where
 
 import           Data.Hashable (Hashable)
+
+data Box f where Box :: f a -> Box f
+data Box2 f where Box2 :: f a b -> Box2 f
 
 newtype CallId
     = CallId Int deriving (Eq, Show, Hashable)
