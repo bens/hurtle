@@ -41,6 +41,7 @@ test-suite hurtle-test
   -- other-extensions:
   build-depends:
       base >=4.6 && <4.8
+    , containers
     , hslogger
     , hurtle
     , stm

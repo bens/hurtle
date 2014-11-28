@@ -1,24 +1,26 @@
+{-# LANGUAGE DeriveFunctor             #-}
+{-# LANGUAGE ExistentialQuantification #-}
+
 module System.Hurtle.Log where
 
-import           System.Hurtle.Common
 import           Text.Printf
 
-data Log e
+data Log e i
     = Finished
     | GotLock
-    | NoHandlerFound CallId
+    | NoHandlerFound i
     | ReleasedLock
-    | Retrying CallId
-    | Sending CallId
+    | Retrying i
+    | Sending i
     | SystemError e
     | Waiting
-      deriving (Eq, Show)
+      deriving (Show, Functor)
 
 data Level
     = Debug | Info | Warning | Error
       deriving (Eq, Ord, Show)
 
-logLevel :: Log e -> Level
+logLevel :: Log e i -> Level
 logLevel msg = case msg of
     Finished         -> Info
     GotLock          -> Debug
@@ -29,7 +31,7 @@ logLevel msg = case msg of
     SystemError _    -> Error
     Waiting          -> Debug
 
-logDescription :: (e -> String) -> Log e -> String
+logDescription :: Show i => (e -> String) -> Log e i -> String
 logDescription showE msg = case msg of
     Finished           -> "finished"
     GotLock            -> ">>>"

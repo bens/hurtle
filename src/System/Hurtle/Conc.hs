@@ -57,11 +57,15 @@ module System.Hurtle.Conc
   ( Hurtle, runHurtle, fork, request
     -- * Connections
   , Connection(..), Response(..)
+    -- * Contents-oblivious comparisons
+  , EqF(..), WrapEqF(..), BlindEqF(..)
+  , OrdF(..), WrapOrdF(..), BlindOrdF(..)
   ) where
 
 import           Control.Applicative
 import qualified Control.Monad.Trans.Free  as Free
 
+import           System.Hurtle.Common
 import           System.Hurtle.Log
 import           System.Hurtle.Types
 
@@ -75,8 +79,8 @@ request :: Connection c => Request c a -> Hurtle s c a
 request req = Hurtle $ Free.liftF (CallF req id)
 
 runHurtle :: (Connection c, Applicative (M c), Monad (M c))
-          => InitArgs c                   -- ^ Initialisation
-          -> (Log (Error c) -> M c ())    -- ^ Log handler
-          -> (forall s. Hurtle s c a)     -- ^ Action to run
+          => InitArgs c                                      -- ^ Initialisation
+          -> (forall i. Show i => Log (Error c) i -> M c ()) -- ^ Log handler
+          -> (forall s. Hurtle s c a)                        -- ^ Action to run
           -> M c (Either (Error c) a)
 runHurtle args logIt' (Hurtle m) = undefined

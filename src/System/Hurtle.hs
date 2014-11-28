@@ -1,7 +1,13 @@
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RankNTypes       #-}
+
 module System.Hurtle
-  ( RequestsT(..), request
+  ( -- * RequestsT Transformer
+    RequestsT(..), request
+    -- * Hurtle
   , Hurtle, runHurtle, makeCall
     -- * Backends
+  , LL.Forkable(..), LL.LogHandler
   , module System.Hurtle.Common
     -- * Logging
   , module System.Hurtle.Log
@@ -13,11 +19,12 @@ import           Control.Monad.IO.Class    (MonadIO (..))
 import           Control.Monad.Trans.Class (MonadTrans (..))
 
 import           System.Hurtle.Common
-import           System.Hurtle.LL          (LLT)
+import           System.Hurtle.LL          (LL)
 import qualified System.Hurtle.LL          as LL
 import           System.Hurtle.Log
 
-newtype RequestsT i m a = RequestsT{ unRequestsT :: (i -> m ()) -> m a }
+newtype RequestsT i m a
+    = RequestsT{ unRequestsT :: (i -> m (LL.Final m)) -> m a }
 
 instance Functor m => Functor (RequestsT i m) where
     fmap f (RequestsT k) = RequestsT (fmap f . k)
@@ -39,19 +46,20 @@ instance (Functor m, MonadIO m) => MonadIO (RequestsT i m) where
 request :: LL.Forkable m => i -> RequestsT i m ()
 request i = RequestsT $ \f -> LL.fork (f i)
 
-type Hurtle t t' e i m = RequestsT i (LLT t t' e m)
+type Hurtle c i r = RequestsT i (LL c r)
 
-makeCall :: Monad m => t -> (t' -> Either e a) -> Hurtle t t' e i m a
-makeCall x k = lift $ LL.makeCall x (fmap return . k)
+makeCall :: (Connection c, Monad (M c)) => Request c a -> Hurtle c i r a
+makeCall x = lift $ LL.makeCall x
 
-runHurtle :: (Functor m, Monad m)
-          => Config t t' e m            -- ^ Configuration
-          -> (a -> m ())                -- ^ Final action for each input
-          -> (Log e -> m ())            -- ^ Log handler
+runHurtle :: (Connection c, Functor (M c), Monad (M c))
+          => InitArgs c                 -- ^ Configuration
+          -> (a -> M c ())              -- ^ Final action for each input
+          -> LL.LogHandler c            -- ^ Log handler
           -> [i]                        -- ^ Initial values to enqueue
-          -> (i -> Hurtle t t' e i m a) -- ^ Action for each input
-          -> m ()
-runHurtle cfg finish logIt xs f = do
-    let f' x = unRequestsT (f x >>= (lift . lift . finish)) f'
-        start = lift $ mapM_ (LL.fork . f') xs
-    LL.runLL cfg logIt $ unRequestsT start f'
+          -> (i -> Hurtle c i a a)      -- ^ Action for each input
+          -> M c ()
+runHurtle _ _ _ [] _ = return ()
+runHurtle cfg finish logIt (x:xs) f = do
+    let f' = flip unRequestsT f' . f
+        start = mapM_ (LL.fork . f') xs >> f' x
+    LL.runLL cfg finish logIt $ unRequestsT (lift start) f'
