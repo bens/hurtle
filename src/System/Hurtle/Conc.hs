@@ -78,6 +78,7 @@ import           System.Hurtle.Common
 import           System.Hurtle.Log
 import           System.Hurtle.Types
 import qualified System.Hurtle.TypedStore  as TS
+import qualified System.Hurtle.TypedStore2 as TS2
 import           System.Hurtle.Unsafe
 
 -- | Fork a new process and return an action that will wait for the result.
@@ -88,6 +89,15 @@ fork h = Hurtle . Free.liftF . ForkF (unHurtle h) $ \fid ->
 -- | Make a request and wait for the response.
 request :: Connection c => Request c a -> Hurtle s c a
 request req = Hurtle $ Free.liftF (CallF req id)
+
+sendingRequest :: (Functor m, Monad m)
+               => SomeRequest s c b a
+               -> StateT (HurtleState s t c) m
+                      (TS2.Id t (SomeRequest s c b a))
+sendingRequest sr = do
+    st <- get
+    let (i, inflight') = TS2.insert sr (_stInFlight st)
+    i <$ put st{ _stInFlight = inflight' }
 
 forkProcess :: (Functor m, Monad m)
             => StateT (HurtleState s t c) m (ForkId s c a)
@@ -124,9 +134,10 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
                         modify $ \st -> st{ _stForks = forks' }
                         -- TODO: resume any waiting processes
                         return ()
-            Free (CallF _req _k) ->
-                -- TODO: send request and list process as awaiting a response
-                return ()
+            Free (CallF req k) -> do
+                callId <- sendingRequest (Req req k)
+                st <- get
+                lift $ send (_stState st) (SR forkId callId) req
             Free (ForkF _m' _k) ->
                 -- TODO: initialise new process and run until it blocks
                 -- TODO: resume the forking process
@@ -139,10 +150,15 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
         receiver rootFid = fix $ \loop -> unlessDone rootFid $ do
             response <- lift (gets _stState >>= lift . receive)
             case response of
-                Ok (SR _ _) _ ->
-                    -- TODO: lookup the call and remove from inflight table
-                    -- TODO: resume the process
-                    return ()
+                Ok (SR forkId callId) resp -> do
+                    st <- lift get
+                    case TS2.lookup callId (_stInFlight st) of
+                        Nothing -> error "wtf?"
+                        Just (Req _ k) -> do
+                            lift $ put st{
+                                _stInFlight = TS2.delete callId (_stInFlight st)
+                                }
+                            P.yield (Step forkId (k resp))
                 Retry _ _ ->
                     -- TODO: handle retries
                     return ()
