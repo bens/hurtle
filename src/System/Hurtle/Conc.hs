@@ -77,6 +77,7 @@ import qualified Pipes                     as P
 import           System.Hurtle.Common
 import           System.Hurtle.Log
 import           System.Hurtle.Types
+import qualified System.Hurtle.TypedStore  as TS
 import           System.Hurtle.Unsafe
 
 -- | Fork a new process and return an action that will wait for the result.
@@ -92,8 +93,9 @@ forkProcess :: (Functor m, Monad m)
             => StateT (HurtleState s t c) m (ForkId s c a)
 forkProcess = do
     st <- get
-    put st{ _stNextId = _stNextId st + 1 }
-    return (ForkId (_stNextId st))
+    let (fid, forks') = TS.insert ProcessRunning (_stForks st)
+    put st{ _stNextId = _stNextId st + 1, _stForks = forks' }
+    return (ForkId (_stNextId st) fid)
 
 data Step s c where
     Step :: ForkId s c a -> Free (HurtleF s c) a -> Step s c
@@ -104,11 +106,24 @@ runHurtle :: (Connection c, Applicative (M c), Monad (M c))
           -> (forall s. Hurtle s c a)                        -- ^ Action to run
           -> M c (Either (Error c) a)
 runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
-    let process (Step forkId@(ForkId _) (FreeT (Identity m))) = case m of
-            Pure _x ->
-                -- TODO: put the result into the forks table
-                -- TODO: resume any waiting processes
-                return ()
+    let unlessDone (ForkId _ fid) k = do
+            st <- lift get
+            case fid TS.! _stForks st of
+                ProcessDone x -> return (Right x)
+                ProcessFailed err -> return (Left err)
+                ProcessRunning -> k
+
+        process (Step forkId@(ForkId _ fid) (FreeT (Identity m))) = case m of
+            Pure x -> do
+                forks <- gets _stForks
+                case fid TS.! forks of
+                    ProcessDone _   -> error "wtf?"  -- finished twice?!
+                    ProcessFailed _ -> error "wtf?"  -- finished twice?!
+                    ProcessRunning -> do
+                        let forks' = TS.update fid (ProcessDone x) forks
+                        modify $ \st -> st{ _stForks = forks' }
+                        -- TODO: resume any waiting processes
+                        return ()
             Free (CallF _req _k) ->
                 -- TODO: send request and list process as awaiting a response
                 return ()
@@ -121,7 +136,7 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
                 -- TODO: otherwise register this process as waiting
                 return ()
 
-        receiver = fix $ \loop -> do
+        receiver rootFid = fix $ \loop -> unlessDone rootFid $ do
             response <- lift (gets _stState >>= lift . receive)
             case response of
                 Ok (SR _ _) _ ->
@@ -139,5 +154,5 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
     flip evalStateT st0 . P.runEffect $
         let kickoff = do
                 forkId <- lift forkProcess
-                P.yield (Step forkId h)
-        in (kickoff >> receiver) >-> fix (P.await >>= lift . process >>)
+                forkId <$ P.yield (Step forkId h)
+        in (kickoff >>= receiver) >-> fix (P.await >>= lift . process >>)

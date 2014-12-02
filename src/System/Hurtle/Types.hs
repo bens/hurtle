@@ -12,12 +12,12 @@ import           System.Hurtle.Common
 import qualified System.Hurtle.TypedStore  as TS
 import qualified System.Hurtle.TypedStore2 as TS2
 
-data ForkId s (c :: (* -> *) -> *) a
-    = ForkId Int
+data ForkId s c a
+    = ForkId Int (TS.Id s (SomeProcess s c a))
 instance EqF (ForkId s c) where
-    ForkId i `eqF` ForkId j = i == j
+    ForkId i _ `eqF` ForkId j _ = i == j
 instance OrdF (ForkId s c) where
-    ForkId i `compareF` ForkId j = i `compare` j
+    ForkId i _ `compareF` ForkId j _ = i `compare` j
 
 data SentRequest s t c a where
     SR :: ForkId s c b -> TS2.Id t (SomeRequest s c b a) -> SentRequest s t c a
