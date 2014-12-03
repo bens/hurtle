@@ -32,7 +32,7 @@ data BlockedProcess s c a where
 data SomeProcess s c a
     = ProcessDone a
     | ProcessFailed (Error c)
-    | ProcessRunning
+    | ProcessRunning [BlockedProcess s c a]
 
 data SomeRequest s c b a =
     Req (Request c a) (a -> Free (HurtleF s c) b)

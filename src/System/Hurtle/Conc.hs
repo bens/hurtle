@@ -65,6 +65,7 @@ module System.Hurtle.Conc
   ) where
 
 import           Control.Applicative
+import           Control.Monad             (forM_)
 import           Control.Monad.Fix         (fix)
 import           Control.Monad.Trans.Free  (Free, FreeT(..), FreeF(..))
 import qualified Control.Monad.Trans.Free  as Free
@@ -103,7 +104,7 @@ forkProcess :: (Functor m, Monad m)
             => StateT (HurtleState s t c) m (ForkId s c a)
 forkProcess = do
     st <- get
-    let (fid, forks') = TS.insert ProcessRunning (_stForks st)
+    let (fid, forks') = TS.insert (ProcessRunning []) (_stForks st)
     put st{ _stNextId = _stNextId st + 1, _stForks = forks' }
     return (ForkId (_stNextId st) fid)
 
@@ -121,7 +122,7 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
             case fid TS.! _stForks st of
                 ProcessDone x -> return (Right x)
                 ProcessFailed err -> return (Left err)
-                ProcessRunning -> k
+                ProcessRunning _ -> k
 
         process (Step forkId@(ForkId _ fid) (FreeT (Identity m))) = case m of
             Pure x -> do
@@ -129,23 +130,32 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
                 case fid TS.! forks of
                     ProcessDone _   -> error "wtf?"  -- finished twice?!
                     ProcessFailed _ -> error "wtf?"  -- finished twice?!
-                    ProcessRunning -> do
+                    ProcessRunning bps -> do
                         let forks' = TS.update fid (ProcessDone x) forks
                         modify $ \st -> st{ _stForks = forks' }
-                        -- TODO: resume any waiting processes
-                        return ()
+                        -- resume any waiting processes
+                        forM_ bps $ \(BP forkId' k) ->
+                            process (Step forkId' (k x))
             Free (CallF req k) -> do
                 callId <- sendingRequest (Req req k)
                 st <- get
                 lift $ send (_stState st) (SR forkId callId) req
-            Free (ForkF _m' _k) ->
-                -- TODO: initialise new process and run until it blocks
-                -- TODO: resume the forking process
-                return ()
-            Free (BlockF _fid _k) ->
-                -- TODO: check that the fork hasn't already completed
-                -- TODO: otherwise register this process as waiting
-                return ()
+            Free (ForkF m' k) -> do
+                forkId' <- forkProcess
+                process (Step forkId' m')
+                process (Step forkId (k forkId'))
+            Free (BlockF (ForkId _ fid') k) -> do
+                forks <- gets _stForks
+                case fid' TS.! forks of
+                    ProcessDone x ->
+                        process (Step forkId (k x))
+                    ProcessFailed err -> do
+                        let procFailed = TS.update fid (ProcessFailed err)
+                        modify $ \st -> st{ _stForks = procFailed forks }
+                    ProcessRunning bps -> do
+                        let bp = BP forkId k
+                            register = TS.update fid' (ProcessRunning (bp:bps))
+                        modify $ \st -> st{ _stForks = register forks }
 
         receiver rootFid = fix $ \loop -> unlessDone rootFid $ do
             response <- lift (gets _stState >>= lift . receive)
