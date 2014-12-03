@@ -159,7 +159,7 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
                             register = TS.update fid' (ProcessRunning (bp:bps))
                         modify $ \st -> st{ _stForks = register forks }
 
-        receiver rootFid = fix $ \loop -> unlessDone rootFid $ do
+        receiver rootFid@(ForkId _ fid) = fix $ \loop -> unlessDone rootFid $ do
             response <- lift (gets _stState >>= lift . receive)
             case response of
                 Ok (SR forkId callId) resp -> do
@@ -171,12 +171,17 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
                                 _stInFlight = TS2.delete callId (_stInFlight st)
                                 }
                             P.yield (Step forkId (k resp))
-                Retry _ _ ->
-                    -- TODO: handle retries
-                    return ()
-                Fatal _ _ ->
-                    -- TODO: quit early on a fatal error
-                    return ()
+                Retry (SR forkId callId) _ -> do
+                    st <- lift get
+                    case TS2.lookup callId (_stInFlight st) of
+                        Nothing -> error "wtf?"
+                        Just (Req req k') -> do
+                            let k = FreeT (Identity (Free (CallF req k')))
+                            P.yield (Step forkId k)
+                Fatal _ err -> do
+                    st <- lift get
+                    let failed = TS.update fid (ProcessFailed err)
+                    lift $ put st{ _stForks = failed (_stForks st) }
             loop
 
     flip evalStateT st0 . P.runEffect $
