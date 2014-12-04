@@ -62,6 +62,8 @@ module System.Hurtle.Conc
     -- * Contents-oblivious comparisons
   , EqF(..), WrapEqF(..), BlindEqF(..)
   , OrdF(..), WrapOrdF(..), BlindOrdF(..)
+    -- * Logging
+  , module System.Hurtle.Log
   ) where
 
 import           Control.Applicative

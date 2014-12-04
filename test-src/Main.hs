@@ -6,13 +6,15 @@ module Main where
 import           Control.Applicative
 import qualified Control.Concurrent        as Conc
 import qualified Control.Concurrent.STM    as STM
-import           Control.Monad             (when)
+import           Control.Monad             (when, join)
+import           Data.List                 (sortBy)
 import qualified Data.Map                  as M
 import           System.IO                 (stderr)
 import qualified System.Log.Handler.Simple as Log
 import qualified System.Log.Logger         as Log
 
 import           System.Hurtle             as Old
+import           System.Hurtle.Conc        as New
 
 data TestConn i
     = TestConn (STM.TVar (M.Map (WrapOrdF i Int) Int))
@@ -61,7 +63,8 @@ instance Connection TestConn where
 
 main :: IO ()
 main = do
-    mainOld
+    -- mainOld
+    mainNew
 
 echoIntOld :: Int -> Old.Hurtle TestConn i r Int
 echoIntOld x = Old.makeCall (ReqInt x)
@@ -69,21 +72,28 @@ echoIntOld x = Old.makeCall (ReqInt x)
 showIntOld :: Int -> Old.Hurtle TestConn i r String
 showIntOld x = Old.makeCall (ReqStr x)
 
-mainOld :: IO ()
-mainOld = do
+setupLogging :: IO ()
+setupLogging = do
     handler <- Log.verboseStreamHandler stderr Log.DEBUG
     let setLevel   = Log.setLevel Log.DEBUG
         setHandler = Log.setHandlers [handler]
     Log.updateGlobalLogger Log.rootLoggerName (setLevel . setHandler)
 
+logHandler :: Show i => Log (Error TestConn) i -> IO ()
+logHandler msg = case logLevel msg of
+    Debug   -> Log.debugM   component (logDescription showE msg)
+    Info    -> Log.infoM    component (logDescription showE msg)
+    Warning -> Log.warningM component (logDescription showE msg)
+    Error   -> Log.errorM   component (logDescription showE msg)
+  where
+    component = "Hurtle"
+    showE (ErrTest x) = "ERR: " ++ x
+
+mainOld :: IO ()
+mainOld = do
     let doneHandler x = Log.infoM "main" $ "result was " ++ show x
-        errHandler (ErrTest msg) = "ERR: " ++ msg
-        logHandler msg = case logLevel msg of
-            Debug   -> Log.debugM   component (logDescription errHandler msg)
-            Info    -> Log.infoM    component (logDescription errHandler msg)
-            Warning -> Log.warningM component (logDescription errHandler msg)
-            Error   -> Log.errorM   component (logDescription errHandler msg)
-            where component = "Hurtle"
+
+    setupLogging
 
     Old.runHurtle InitTest doneHandler logHandler [5] $ \x -> do
         _ <- echoIntOld x
@@ -96,3 +106,26 @@ mainOld = do
 
     Conc.threadDelay (10^(5::Int))
     Log.infoM "main" "DONE"
+
+echoIntNew :: Int -> New.Hurtle s TestConn Int
+echoIntNew x = New.request (ReqInt x)
+
+showIntNew :: Int -> New.Hurtle s TestConn String
+showIntNew x = New.request (ReqStr x)
+
+mainNew :: IO ()
+mainNew = do
+    let test 0 = New.fork $ pure <$> New.request (ReqInt 0)
+        test 1 = New.fork $ pure <$> New.request (ReqInt 1)
+        test n = do
+            xm <- New.fork $ New.request (ReqInt n)
+            xsm <- test (n-1)
+            ysm <- test (n-2)
+            return $ do
+                x  <- xm
+                xs <- xsm
+                ys <- ysm
+                return $ sortBy (flip compare) (x : xs ++ ys)
+
+    setupLogging
+    New.runHurtle InitTest logHandler (join (test 5)) >>= print
