@@ -119,39 +119,48 @@ runHurtle :: (Connection c, Applicative (M c), Monad (M c))
           -> (forall s. Hurtle s c a)                        -- ^ Action to run
           -> M c (Either (Error c) a)
 runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
-    let unlessDone (ForkId _ fid) k = do
+    let logIt x = logIt' x where _ = [Sending (0 :: Int), x]
+
+        unlessDone (ForkId _ fid) k = do
             st <- lift get
             case fid TS.! _stForks st of
                 ProcessDone x -> return (Right x)
                 ProcessFailed err -> return (Left err)
                 ProcessRunning _ -> k
 
-        process (Step forkId@(ForkId _ fid) (FreeT (Identity m))) = case m of
+        process (Step forkId@(ForkId cid fid) (FreeT (Identity m))) = case m of
             Pure x -> do
                 forks <- gets _stForks
                 case fid TS.! forks of
                     ProcessDone _   -> error "wtf?"  -- finished twice?!
                     ProcessFailed _ -> error "wtf?"  -- finished twice?!
                     ProcessRunning bps -> do
+                        lift . logIt $ Finished cid
                         let forks' = TS.update fid (ProcessDone x) forks
                         modify $ \st -> st{ _stForks = forks' }
                         -- resume any waiting processes
-                        forM_ bps $ \(BP forkId' k) ->
+                        forM_ bps $ \(BP forkId'@(ForkId cid' _) k) -> do
+                            lift . logIt $ Continuing cid' cid
                             process (Step forkId' (k x))
             Free (CallF req k) -> do
+                lift . logIt $ Sending cid
                 callId <- sendingRequest (Req req k)
                 st <- get
                 lift $ send (_stState st) (SR forkId callId) req
             Free (ForkF m' k) -> do
-                forkId' <- forkProcess
+                forkId'@(ForkId cid' _) <- forkProcess
+                lift . logIt $ Forked cid cid'
                 process (Step forkId' m')
                 process (Step forkId (k forkId'))
-            Free (BlockF (ForkId _ fid') k) -> do
+            Free (BlockF (ForkId cid' fid') k) -> do
+                lift . logIt $ Blocked cid cid'
                 forks <- gets _stForks
                 case fid' TS.! forks of
-                    ProcessDone x ->
+                    ProcessDone x -> do
+                        lift . logIt $ Continuing cid cid'
                         process (Step forkId (k x))
                     ProcessFailed err -> do
+                        lift . logIt $ PropagatingError cid' cid
                         let procFailed = TS.update fid (ProcessFailed err)
                         modify $ \st -> st{ _stForks = procFailed forks }
                     ProcessRunning bps -> do
@@ -162,25 +171,33 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
         receiver rootFid@(ForkId _ fid) = fix $ \loop -> unlessDone rootFid $ do
             response <- lift (gets _stState >>= lift . receive)
             case response of
-                Ok (SR forkId callId) resp -> do
+                Ok (SR forkId@(ForkId cid _) callId) resp -> do
                     st <- lift get
                     case TS2.lookup callId (_stInFlight st) of
                         Nothing -> error "wtf?"
                         Just (Req _ k) -> do
+                            lift . lift . logIt $ Resumed cid
                             lift $ put st{
                                 _stInFlight = TS2.delete callId (_stInFlight st)
                                 }
                             P.yield (Step forkId (k resp))
-                Retry (SR forkId callId) _ -> do
+                Retry (SR forkId@(ForkId cid _) callId) _ -> do
+                    lift . lift . logIt $ Retrying cid
                     st <- lift get
                     case TS2.lookup callId (_stInFlight st) of
                         Nothing -> error "wtf?"
                         Just (Req req k') -> do
                             let k = FreeT (Identity (Free (CallF req k')))
                             P.yield (Step forkId k)
-                Fatal _ err -> do
+                Fatal Nothing err -> do
+                    lift . lift . logIt $ SystemError err
                     st <- lift get
                     let failed = TS.update fid (ProcessFailed err)
+                    lift $ put st{ _stForks = failed (_stForks st) }
+                Fatal (Just (SR (ForkId cid' fid') _)) err -> do
+                    lift . lift . logIt $ SystemError' cid' err
+                    st <- lift get
+                    let failed = TS.update fid' (ProcessFailed err)
                     lift $ put st{ _stForks = failed (_stForks st) }
             loop
 

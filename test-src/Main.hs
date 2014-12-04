@@ -61,17 +61,6 @@ instance Connection TestConn where
             Left  (WrapOrdF cid, x) -> return $ Ok cid x
             Right (WrapOrdF cid, x) -> return $ Ok cid (show x)
 
-main :: IO ()
-main = do
-    -- mainOld
-    mainNew
-
-echoIntOld :: Int -> Old.Hurtle TestConn i r Int
-echoIntOld x = Old.makeCall (ReqInt x)
-
-showIntOld :: Int -> Old.Hurtle TestConn i r String
-showIntOld x = Old.makeCall (ReqStr x)
-
 setupLogging :: IO ()
 setupLogging = do
     handler <- Log.verboseStreamHandler stderr Log.DEBUG
@@ -88,6 +77,17 @@ logHandler msg = case logLevel msg of
   where
     component = "Hurtle"
     showE (ErrTest x) = "ERR: " ++ x
+
+main :: IO ()
+main = do
+    -- mainOld
+    mainNew
+
+echoIntOld :: Int -> Old.Hurtle TestConn i r Int
+echoIntOld x = Old.makeCall (ReqInt x)
+
+showIntOld :: Int -> Old.Hurtle TestConn i r String
+showIntOld x = Old.makeCall (ReqStr x)
 
 mainOld :: IO ()
 mainOld = do

@@ -100,6 +100,7 @@ runLL initArgs finish logIt ll = TS.typedStore $ \inflight -> do
                 case resp of
                     Pure x -> do
                         forM_ forks $ \m' -> do{ i <- nextId; go (i, m') }
+                        lift . logIt $ Finished (CallId' cid)
                         lift $ finish x
                     Free (Throw e) -> lift . logIt . lll $ SystemError e
                     Free (LLF req k) -> do
@@ -144,7 +145,6 @@ runLL initArgs finish logIt ll = TS.typedStore $ \inflight -> do
     let initialState = LLState 0 initialSt inflight
     finalState <- execStateT (P.runEffect program) initialState
     finalise (_llState finalState)
-    logIt (lll Finished)
 
 --
 -- Forkable
