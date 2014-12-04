@@ -23,6 +23,7 @@ library
       System.Hurtle.TypedStore
       System.Hurtle.TypedStore2
       System.Hurtle.Types
+      System.Hurtle.Unsafe
   build-depends:
       base >=4.6 && <4.8
     , containers

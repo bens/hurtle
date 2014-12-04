@@ -1,5 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs            #-}
 {-# LANGUAGE RankNTypes       #-}
+{-# LANGUAGE Safe             #-}
 
 {- |
 = Design Overview
@@ -63,11 +65,19 @@ module System.Hurtle.Conc
   ) where
 
 import           Control.Applicative
+import           Control.Monad.Fix         (fix)
+import           Control.Monad.Trans.Free  (Free, FreeT(..), FreeF(..))
 import qualified Control.Monad.Trans.Free  as Free
+import           Control.Monad.Trans.State
+import           Control.Monad.Trans.Class (lift)
+import           Data.Functor.Identity
+import           Pipes                     ((>->))
+import qualified Pipes                     as P
 
 import           System.Hurtle.Common
 import           System.Hurtle.Log
 import           System.Hurtle.Types
+import           System.Hurtle.Unsafe
 
 -- | Fork a new process and return an action that will wait for the result.
 fork :: Connection c => Hurtle s c a -> Hurtle s c (Hurtle s c a)
@@ -78,9 +88,56 @@ fork h = Hurtle . Free.liftF . ForkF (unHurtle h) $ \fid ->
 request :: Connection c => Request c a -> Hurtle s c a
 request req = Hurtle $ Free.liftF (CallF req id)
 
+forkProcess :: (Functor m, Monad m)
+            => StateT (HurtleState s t c) m (ForkId s c a)
+forkProcess = do
+    st <- get
+    put st{ _stNextId = _stNextId st + 1 }
+    return (ForkId (_stNextId st))
+
+data Step s c where
+    Step :: ForkId s c a -> Free (HurtleF s c) a -> Step s c
+
 runHurtle :: (Connection c, Applicative (M c), Monad (M c))
           => InitArgs c                                      -- ^ Initialisation
           -> (forall i. Show i => Log (Error c) i -> M c ()) -- ^ Log handler
           -> (forall s. Hurtle s c a)                        -- ^ Action to run
           -> M c (Either (Error c) a)
-runHurtle args logIt' (Hurtle m) = undefined
+runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
+    let process (Step forkId@(ForkId _) (FreeT (Identity m))) = case m of
+            Pure _x ->
+                -- TODO: put the result into the forks table
+                -- TODO: resume any waiting processes
+                return ()
+            Free (CallF _req _k) ->
+                -- TODO: send request and list process as awaiting a response
+                return ()
+            Free (ForkF _m' _k) ->
+                -- TODO: initialise new process and run until it blocks
+                -- TODO: resume the forking process
+                return ()
+            Free (BlockF _fid _k) ->
+                -- TODO: check that the fork hasn't already completed
+                -- TODO: otherwise register this process as waiting
+                return ()
+
+        receiver = fix $ \loop -> do
+            response <- lift (gets _stState >>= lift . receive)
+            case response of
+                Ok (SR _ _) _ ->
+                    -- TODO: lookup the call and remove from inflight table
+                    -- TODO: resume the process
+                    return ()
+                Retry _ _ ->
+                    -- TODO: handle retries
+                    return ()
+                Fatal _ _ ->
+                    -- TODO: quit early on a fatal error
+                    return ()
+            loop
+
+    flip evalStateT st0 . P.runEffect $
+        let kickoff = do
+                forkId <- lift forkProcess
+                P.yield (Step forkId h)
+        in (kickoff >> receiver) >-> fix (P.await >>= lift . process >>)
