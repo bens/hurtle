@@ -4,17 +4,15 @@
 module Main where
 
 import           Control.Applicative
-import qualified Control.Concurrent        as Conc
 import qualified Control.Concurrent.STM    as STM
-import           Control.Monad             (when, join)
+import           Control.Monad             (join)
 import           Data.List                 (sortBy)
 import qualified Data.Map                  as M
 import           System.IO                 (stderr)
 import qualified System.Log.Handler.Simple as Log
 import qualified System.Log.Logger         as Log
 
-import           System.Hurtle             as Old
-import           System.Hurtle.Conc        as New
+import           System.Hurtle.Conc
 
 data TestConn i
     = TestConn (STM.TVar (M.Map (WrapOrdF i Int) Int))
@@ -79,46 +77,21 @@ logHandler msg = case logLevel msg of
     showE (ErrTest x) = "ERR: " ++ x
 
 main :: IO ()
-main = do
-    -- mainOld
+main =
     mainNew
 
-echoIntOld :: Int -> Old.Hurtle TestConn i r Int
-echoIntOld x = Old.makeCall (ReqInt x)
+echoIntNew :: Int -> Hurtle s TestConn Int
+echoIntNew x = request (ReqInt x)
 
-showIntOld :: Int -> Old.Hurtle TestConn i r String
-showIntOld x = Old.makeCall (ReqStr x)
-
-mainOld :: IO ()
-mainOld = do
-    let doneHandler x = Log.infoM "main" $ "result was " ++ show x
-
-    setupLogging
-
-    Old.runHurtle InitTest doneHandler logHandler [5] $ \x -> do
-        _ <- echoIntOld x
-        _ <- showIntOld x
-        when (x > 1) $
-            Old.request (pred x) >> Old.request (pred (pred x))
-        when (x == 1) $
-            Old.request 0
-        return x
-
-    Conc.threadDelay (10^(5::Int))
-    Log.infoM "main" "DONE"
-
-echoIntNew :: Int -> New.Hurtle s TestConn Int
-echoIntNew x = New.request (ReqInt x)
-
-showIntNew :: Int -> New.Hurtle s TestConn String
-showIntNew x = New.request (ReqStr x)
+showIntNew :: Int -> Hurtle s TestConn String
+showIntNew x = request (ReqStr x)
 
 mainNew :: IO ()
 mainNew = do
-    let test 0 = New.fork $ pure <$> New.request (ReqInt 0)
-        test 1 = New.fork $ pure <$> New.request (ReqInt 1)
+    let test 0 = fork $ pure <$> request (ReqInt 0)
+        test 1 = fork $ pure <$> request (ReqInt 1)
         test n = do
-            xm <- New.fork $ New.request (ReqInt n)
+            xm <- fork $ request (ReqInt n)
             xsm <- test (n-1)
             ysm <- test (n-2)
             return $ do
@@ -128,4 +101,4 @@ mainNew = do
                 return $ sortBy (flip compare) (x : xs ++ ys)
 
     setupLogging
-    New.runHurtle InitTest logHandler (join (test 5)) >>= print
+    runHurtle InitTest logHandler (join (test 5)) >>= print
