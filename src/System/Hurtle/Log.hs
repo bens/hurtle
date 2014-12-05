@@ -1,41 +1,52 @@
+{-# LANGUAGE DeriveFunctor             #-}
+{-# LANGUAGE ExistentialQuantification #-}
+
 module System.Hurtle.Log where
 
-import           System.Hurtle.Common
 import           Text.Printf
 
-data Log e
-    = Finished
-    | GotLock
-    | NoHandlerFound CallId
-    | ReleasedLock
-    | Retrying CallId
-    | Sending CallId
+data Log e i
+    = Blocked i i
+    | Continuing i i
+    | Finished i
+    | Forked i i
+    | PropagatingError i i
+    | Resumed i
+    | Retrying i
+    | Sending i
     | SystemError e
-    | Waiting
-      deriving (Eq, Show)
+    | SystemError' i e
+      deriving (Show, Functor)
 
 data Level
     = Debug | Info | Warning | Error
       deriving (Eq, Ord, Show)
 
-logLevel :: Log e -> Level
+logLevel :: Log e i -> Level
 logLevel msg = case msg of
-    Finished         -> Info
-    GotLock          -> Debug
-    NoHandlerFound _ -> Error
-    ReleasedLock     -> Debug
-    Retrying _       -> Warning
-    Sending _        -> Debug
-    SystemError _    -> Error
-    Waiting          -> Debug
+    Blocked _ _          -> Debug
+    Continuing _ _       -> Debug
+    Finished _           -> Debug
+    Forked _ _           -> Debug
+    PropagatingError _ _ -> Debug
+    Resumed _            -> Debug
+    Retrying _           -> Warning
+    Sending _            -> Debug
+    SystemError _        -> Error
+    SystemError' _ _     -> Error
 
-logDescription :: (e -> String) -> Log e -> String
+logDescription :: Show i => (e -> String) -> Log e i -> String
 logDescription showE msg = case msg of
-    Finished           -> "finished"
-    GotLock            -> ">>>"
-    NoHandlerFound cid -> printf "no handler found! (%s)" (show cid)
-    ReleasedLock       -> "<<<"
-    Retrying cid       -> printf "retrying %s..." (show cid)
-    Sending cid        -> printf "sending %s..." (show cid)
-    SystemError e      -> showE e
-    Waiting            -> "waiting..."
+    Blocked blocked on       -> printf "%s waiting for %s"
+                                    (show blocked) (show on)
+    Continuing cid on        -> printf "%s continuing with result from %s"
+                                    (show cid) (show on)
+    Finished cid             -> printf "%s finished" (show cid)
+    Forked old new           -> printf "%s forked %s" (show old) (show new)
+    PropagatingError from to -> printf "copying error from %s to %s"
+                                    (show from) (show to)
+    Resumed cid              -> printf "%s <--" (show cid)
+    Retrying cid             -> printf "retrying %s..." (show cid)
+    Sending cid              -> printf "%s -->" (show cid)
+    SystemError e            -> showE e
+    SystemError' cid e       -> printf "%s failed: %s" (show cid) (showE e)
