@@ -55,7 +55,7 @@ pulling it out and using it as the final result of the computation.
 
 -}
 
-module System.Hurtle.Conc
+module System.Hurtle
   ( Hurtle, runHurtle, fork, request
     -- * Connections
   , Connection(..), Response(..)

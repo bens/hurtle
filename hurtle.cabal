@@ -14,7 +14,7 @@ cabal-version: >=1.10
 
 library
   exposed-modules:
-      System.Hurtle.Conc
+      System.Hurtle
   other-modules:
       System.Hurtle.Common
       System.Hurtle.Log
