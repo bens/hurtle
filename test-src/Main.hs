@@ -12,7 +12,7 @@ import           System.IO                 (stderr)
 import qualified System.Log.Handler.Simple as Log
 import qualified System.Log.Logger         as Log
 
-import           System.Hurtle.Conc
+import           System.Hurtle
 
 data TestConn i
     = TestConn (STM.TVar (M.Map (WrapOrdF i Int) Int))
