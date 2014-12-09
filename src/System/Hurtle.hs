@@ -70,7 +70,6 @@ import           Control.Applicative
 import           Control.Monad             (forM_)
 import           Control.Monad.Fix         (fix)
 import           Control.Monad.Trans.Free  (Free, FreeT(..), FreeF(..))
-import qualified Control.Monad.Trans.Free  as Free
 import           Control.Monad.Trans.State
 import           Control.Monad.Trans.Class (lift)
 import           Data.Functor.Identity
@@ -83,15 +82,6 @@ import           System.Hurtle.Types
 import qualified System.Hurtle.TypedStore  as TS
 import qualified System.Hurtle.TypedStore2 as TS2
 import           System.Hurtle.Unsafe
-
--- | Fork a new process and return an action that will wait for the result.
-fork :: Connection c => Hurtle s c a -> Hurtle s c (Hurtle s c a)
-fork h = Hurtle . Free.liftF . ForkF (unHurtle h) $ \fid ->
-    Hurtle . Free.liftF $ BlockF fid id
-
--- | Make a request and wait for the response.
-request :: Connection c => Request c a -> Hurtle s c a
-request req = Hurtle $ Free.liftF (CallF req id)
 
 sendingRequest :: (Functor m, Monad m)
                => SomeRequest s c b a

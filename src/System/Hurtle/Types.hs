@@ -1,12 +1,15 @@
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE DeriveFunctor              #-}
 {-# LANGUAGE GADTs                      #-}
+{-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE Safe                       #-}
 
 module System.Hurtle.Types where
 
 import           Control.Applicative
+import qualified Control.Monad.Par.Class   as Par
 import           Control.Monad.Trans.Free  (Free)
+import qualified Control.Monad.Trans.Free  as Free
 
 import           System.Hurtle.Common
 import qualified System.Hurtle.TypedStore  as TS
@@ -64,3 +67,16 @@ instance Applicative (Hurtle s c) where
 instance Monad (Hurtle s c) where
     return = Hurtle . return
     Hurtle m >>= f = Hurtle $ m >>= unHurtle . f
+
+instance Connection c => Par.ParFuture (Hurtle s c) (Hurtle s c) where
+    spawn_ = fork
+    get = id
+
+-- | Fork a new process and return an action that will wait for the result.
+fork :: Connection c => Hurtle s c a -> Hurtle s c (Hurtle s c a)
+fork h = Hurtle . Free.liftF . ForkF (unHurtle h) $ \fid ->
+    Hurtle . Free.liftF $ BlockF fid id
+
+-- | Make a request and wait for the response.
+request :: Connection c => Request c a -> Hurtle s c a
+request req = Hurtle $ Free.liftF (CallF req id)

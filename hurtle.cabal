@@ -24,6 +24,7 @@ library
       System.Hurtle.Unsafe
   build-depends:
       base >=4.6 && <4.8
+    , abstract-par
     , containers
     , free
     , pipes
