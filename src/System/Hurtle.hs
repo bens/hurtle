@@ -78,20 +78,10 @@ import           System.Hurtle.Common
 import           System.Hurtle.Log
 import           System.Hurtle.Types
 import qualified System.Hurtle.TypedStore  as TS
-import qualified System.Hurtle.TypedStore2 as TS2
 import           System.Hurtle.Unsafe
 
-sendingRequest :: (Functor m, Monad m)
-               => SomeRequest s c b a
-               -> StateT (HurtleState s t c) m
-                      (TS2.Id t (SomeRequest s c b a))
-sendingRequest sr = do
-    st <- get
-    let (i, inflight') = TS2.insert sr (_stInFlight st)
-    i <$ put st{ _stInFlight = inflight' }
-
 forkProcess :: (Functor m, Monad m)
-            => StateT (HurtleState s t c) m (ForkId s c a)
+            => StateT (HurtleState s c) m (ForkId s c a)
 forkProcess = do
     st <- get
     let (fid, forks') = TS.insert (ProcessRunning []) (_stForks st)
@@ -132,9 +122,8 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 h -> do
                             process (Step forkId' (k x))
             Call req k -> do
                 lift . logIt $ Sending cid
-                callId <- sendingRequest (Req req k)
                 st <- get
-                lift $ send (_stState st) (SR forkId callId) req
+                lift $ send (_stState st) (SR forkId req k) req
             Fork m' k -> do
                 forkId'@(ForkId cid' _) <- forkProcess
                 lift . logIt $ Forked cid cid'
@@ -159,28 +148,18 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 h -> do
         receiver rootFid@(ForkId _ fid) = fix $ \loop -> unlessDone rootFid $ do
             response <- lift (gets _stState >>= lift . receive)
             case response of
-                Ok (SR forkId@(ForkId cid _) callId) resp -> do
-                    st <- lift get
-                    case TS2.lookup callId (_stInFlight st) of
-                        Nothing -> error "wtf?"
-                        Just (Req _ k) -> do
-                            lift . lift . logIt $ Resumed cid
-                            lift $ put st{
-                                _stInFlight = TS2.delete callId (_stInFlight st)
-                                }
-                            signal (Step forkId (k resp))
-                Retry (SR forkId@(ForkId cid _) callId) _ -> do
+                Ok (SR forkId@(ForkId cid _) _ k) resp -> do
+                    lift . lift . logIt $ Resumed cid
+                    signal (Step forkId (k resp))
+                Retry (SR forkId@(ForkId cid _) req k) _ -> do
                     lift . lift . logIt $ Retrying cid
-                    st <- lift get
-                    case TS2.lookup callId (_stInFlight st) of
-                        Nothing -> error "wtf?"
-                        Just (Req req k') -> signal (Step forkId (Call req k'))
+                    signal (Step forkId (Call req k))
                 Fatal Nothing err -> do
                     lift . lift . logIt $ SystemError err
                     st <- lift get
                     let failed = TS.update fid (ProcessFailed err)
                     lift $ put st{ _stForks = failed (_stForks st) }
-                Fatal (Just (SR (ForkId cid' fid') _)) err -> do
+                Fatal (Just (SR (ForkId cid' fid') _ _)) err -> do
                     lift . lift . logIt $ SystemError' cid' err
                     st <- lift get
                     let failed = TS.update fid' (ProcessFailed err)

@@ -6,43 +6,38 @@
 module System.Hurtle.Types where
 
 import           Control.Applicative
-import           Control.Monad             ((>=>), ap)
-import qualified Control.Monad.Par.Class   as Par
+import           Control.Monad            ((>=>), ap)
+import qualified Control.Monad.Par.Class  as Par
 
 import           System.Hurtle.Common
-import qualified System.Hurtle.TypedStore  as TS
-import qualified System.Hurtle.TypedStore2 as TS2
+import qualified System.Hurtle.TypedStore as TS
 
 data ForkId s c a
-    = ForkId Int (TS.Id s (SomeProcess s c a))
+    = ForkId Int (TS.Id s (Process s c a))
 instance EqF (ForkId s c) where
     ForkId i _ `eqF` ForkId j _ = i == j
 instance OrdF (ForkId s c) where
     ForkId i _ `compareF` ForkId j _ = i `compare` j
 
-data SentRequest s t c a where
-    SR :: ForkId s c b -> TS2.Id t (SomeRequest s c b a) -> SentRequest s t c a
-instance EqF (SentRequest s t c) where
-    SR i _ `eqF` SR j _ = BlindEqF i == BlindEqF j
-instance OrdF (SentRequest s t c) where
-    SR i _ `compareF` SR j _ = BlindOrdF i `compare` BlindOrdF j
+data SentRequest s c a where
+    SR :: ForkId s c b -> Request c a -> (a -> Hurtle s c b) -> SentRequest s c a
+instance EqF (SentRequest s c) where
+    SR i _ _ `eqF` SR j _ _ = BlindEqF i == BlindEqF j
+instance OrdF (SentRequest s c) where
+    SR i _ _ `compareF` SR j _ _ = BlindOrdF i `compare` BlindOrdF j
 
 data BlockedProcess s c a where
     BP :: ForkId s c b -> (a -> Hurtle s c b) -> BlockedProcess s c a
 
-data SomeProcess s c a
+data Process s c a
     = ProcessDone a
     | ProcessFailed (Error c)
     | ProcessRunning [BlockedProcess s c a]
 
-data SomeRequest s c b a =
-    Req (Request c a) (a -> Hurtle s c b)
-
-data HurtleState s t c = HState
+data HurtleState s c = HState
     { _stNextId   :: Int
-    , _stState    :: c (SentRequest s t c)
-    , _stForks    :: TS.TypedStore s TS.Mono (SomeProcess s c)
-    , _stInFlight :: TS2.TypedStore t TS2.NonMono (SomeRequest s c)
+    , _stState    :: c (SentRequest s c)
+    , _stForks    :: TS.TypedStore s TS.Mono (Process s c)
     }
 
 data Hurtle s c a where

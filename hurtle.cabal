@@ -19,7 +19,6 @@ library
       System.Hurtle.Common
       System.Hurtle.Log
       System.Hurtle.TypedStore
-      System.Hurtle.TypedStore2
       System.Hurtle.Types
       System.Hurtle.Unsafe
   build-depends:

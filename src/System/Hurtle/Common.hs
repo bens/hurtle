@@ -6,7 +6,6 @@
 module System.Hurtle.Common where
 
 data Box f where Box :: f a -> Box f
-data Box2 f where Box2 :: f a b -> Box2 f
 
 -- Cribbed the EqF/OrdF classes from the ShowF package.
 
