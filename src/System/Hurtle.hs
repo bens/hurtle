@@ -67,14 +67,14 @@ module System.Hurtle
   ) where
 
 import           Control.Applicative
-import           Control.Monad             (forM_)
-import           Control.Monad.Fix         (fix)
-import           Control.Monad.Trans.Free  (Free, FreeT(..), FreeF(..))
+import           Control.Monad                     (forM_)
+import           Control.Monad.Fix                 (fix)
+import           Control.Monad.Resumption          (runResT)
+import           Control.Monad.Resumption.Reactive ((<~>), signal)
+import           Control.Monad.Trans.Class         (lift)
+import           Control.Monad.Trans.Free          (Free, FreeT(..), FreeF(..))
 import           Control.Monad.Trans.State
-import           Control.Monad.Trans.Class (lift)
 import           Data.Functor.Identity
-import           Pipes                     ((>->))
-import qualified Pipes                     as P
 
 import           System.Hurtle.Common
 import           System.Hurtle.Log
@@ -170,7 +170,7 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
                             lift $ put st{
                                 _stInFlight = TS2.delete callId (_stInFlight st)
                                 }
-                            P.yield (Step forkId (k resp))
+                            signal (Step forkId (k resp))
                 Retry (SR forkId@(ForkId cid _) callId) _ -> do
                     lift . lift . logIt $ Retrying cid
                     st <- lift get
@@ -178,7 +178,7 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
                         Nothing -> error "wtf?"
                         Just (Req req k') -> do
                             let k = FreeT (Identity (Free (CallF req k')))
-                            P.yield (Step forkId k)
+                            signal (Step forkId k)
                 Fatal Nothing err -> do
                     lift . lift . logIt $ SystemError err
                     st <- lift get
@@ -191,8 +191,8 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
                     lift $ put st{ _stForks = failed (_stForks st) }
             loop
 
-    flip evalStateT st0 . P.runEffect $
+    fmap (either Left id) . flip evalStateT st0 . runResT $
         let kickoff = do
                 forkId <- lift forkProcess
-                forkId <$ P.yield (Step forkId h)
-        in (kickoff >>= receiver) >-> fix (P.await >>= lift . process >>)
+                forkId <$ signal (Step forkId h)
+        in fix (signal () >>= lift . process >>) <~> (kickoff >>= receiver)

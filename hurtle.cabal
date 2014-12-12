@@ -27,7 +27,7 @@ library
     , abstract-par
     , containers
     , free
-    , pipes
+    , monad-resumption >= 0.1.1.4
     , transformers
   ghc-options:      -Wall
   hs-source-dirs:   src
