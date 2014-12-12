@@ -19,16 +19,13 @@ library
       System.Hurtle.Common
       System.Hurtle.Log
       System.Hurtle.TypedStore
-      System.Hurtle.TypedStore2
       System.Hurtle.Types
       System.Hurtle.Unsafe
   build-depends:
       base >=4.6 && <4.8
+    , abstract-par
     , containers
-    , free
-    , hashable
-    , mmorph
-    , pipes
+    , monad-resumption >= 0.1.1.4
     , transformers
   ghc-options:      -Wall
   hs-source-dirs:   src
@@ -44,7 +41,6 @@ test-suite hurtle-test
     , hslogger
     , hurtle
     , stm
-    , unordered-containers
   ghc-options:      -Wall
   hs-source-dirs:   test-src
   default-language: Haskell2010
