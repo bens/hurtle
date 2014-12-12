@@ -72,9 +72,7 @@ import           Control.Monad.Fix                 (fix)
 import           Control.Monad.Resumption          (runResT)
 import           Control.Monad.Resumption.Reactive ((<~>), signal)
 import           Control.Monad.Trans.Class         (lift)
-import           Control.Monad.Trans.Free          (Free, FreeT(..), FreeF(..))
 import           Control.Monad.Trans.State
-import           Data.Functor.Identity
 
 import           System.Hurtle.Common
 import           System.Hurtle.Log
@@ -101,14 +99,14 @@ forkProcess = do
     return (ForkId (_stNextId st) fid)
 
 data Step s c where
-    Step :: ForkId s c a -> Free (HurtleF s c) a -> Step s c
+    Step :: ForkId s c a -> Hurtle s c a -> Step s c
 
 runHurtle :: (Connection c, Applicative (M c), Monad (M c))
           => InitArgs c                                      -- ^ Initialisation
           -> (forall i. Show i => Log (Error c) i -> M c ()) -- ^ Log handler
           -> (forall s. Hurtle s c a)                        -- ^ Action to run
           -> M c (Either (Error c) a)
-runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
+runHurtle args logIt' h' = withHurtleState args h' $ \st0 h -> do
     let logIt x = logIt' x where _ = [Sending (0 :: Int), x]
 
         unlessDone (ForkId _ fid) k = do
@@ -118,8 +116,8 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
                 ProcessFailed err -> return (Left err)
                 ProcessRunning _ -> k
 
-        process (Step forkId@(ForkId cid fid) (FreeT (Identity m))) = case m of
-            Pure x -> do
+        process (Step forkId@(ForkId cid fid) m) = case m of
+            Done x -> do
                 forks <- gets _stForks
                 case fid TS.! forks of
                     ProcessDone _   -> error "wtf?"  -- finished twice?!
@@ -132,17 +130,17 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
                         forM_ bps $ \(BP forkId'@(ForkId cid' _) k) -> do
                             lift . logIt $ Continuing cid' cid
                             process (Step forkId' (k x))
-            Free (CallF req k) -> do
+            Call req k -> do
                 lift . logIt $ Sending cid
                 callId <- sendingRequest (Req req k)
                 st <- get
                 lift $ send (_stState st) (SR forkId callId) req
-            Free (ForkF m' k) -> do
+            Fork m' k -> do
                 forkId'@(ForkId cid' _) <- forkProcess
                 lift . logIt $ Forked cid cid'
                 process (Step forkId' m')
                 process (Step forkId (k forkId'))
-            Free (BlockF (ForkId cid' fid') k) -> do
+            Block (ForkId cid' fid') k -> do
                 lift . logIt $ Blocked cid cid'
                 forks <- gets _stForks
                 case fid' TS.! forks of
@@ -176,9 +174,7 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 (Hurtle h) -> do
                     st <- lift get
                     case TS2.lookup callId (_stInFlight st) of
                         Nothing -> error "wtf?"
-                        Just (Req req k') -> do
-                            let k = FreeT (Identity (Free (CallF req k')))
-                            signal (Step forkId k)
+                        Just (Req req k') -> signal (Step forkId (Call req k'))
                 Fatal Nothing err -> do
                     lift . lift . logIt $ SystemError err
                     st <- lift get
