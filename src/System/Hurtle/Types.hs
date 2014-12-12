@@ -63,14 +63,14 @@ instance Monad (Hurtle s c) where
     Fork m k    >>= f = Fork m    (k >=> f)
     Block fid k >>= f = Block fid (k >=> f)
 
-instance Connection c => Par.ParFuture (Hurtle s c) (Hurtle s c) where
+instance Par.ParFuture (Hurtle s c) (Hurtle s c) where
     spawn_ = fork
     get = id
 
 -- | Fork a new process and return an action that will wait for the result.
-fork :: Connection c => Hurtle s c a -> Hurtle s c (Hurtle s c a)
+fork :: Hurtle s c a -> Hurtle s c (Hurtle s c a)
 fork h = Fork h $ \fid -> Block fid (return . return)
 
 -- | Make a request and wait for the response.
-request :: Connection c => Request c a -> Hurtle s c a
+request :: Request c a -> Hurtle s c a
 request req = Call req return
