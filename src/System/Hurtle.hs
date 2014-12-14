@@ -168,6 +168,7 @@ runHurtle args logIt' h' = withHurtleState args h' $ \st0 h -> do
 
     fmap (either Left id) . flip evalStateT st0 . runResT $
         let kickoff = do
-                forkId <- lift forkProcess
+                forkId@(ForkId cid _) <- lift forkProcess
+                lift . lift . logIt $ Starting cid
                 forkId <$ signal (Step forkId h)
         in fix (signal () >>= lift . process >>) <~> (kickoff >>= receiver)

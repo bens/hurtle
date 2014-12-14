@@ -14,6 +14,7 @@ data Log e i
     | Resumed i
     | Retrying i
     | Sending i
+    | Starting i
     | SystemError e
     | SystemError' i e
       deriving (Show, Functor)
@@ -32,6 +33,7 @@ logLevel msg = case msg of
     Resumed _            -> Debug
     Retrying _           -> Warning
     Sending _            -> Debug
+    Starting _           -> Debug
     SystemError _        -> Error
     SystemError' _ _     -> Error
 
@@ -48,5 +50,6 @@ logDescription showE msg = case msg of
     Resumed cid              -> printf "%s <--" (show cid)
     Retrying cid             -> printf "retrying %s..." (show cid)
     Sending cid              -> printf "%s -->" (show cid)
+    Starting cid             -> printf "%s started" (show cid)
     SystemError e            -> showE e
     SystemError' cid e       -> printf "%s failed: %s" (show cid) (showE e)
