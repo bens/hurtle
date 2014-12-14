@@ -38,9 +38,13 @@ test-suite hurtle-test
   build-depends:
       base >=4.6 && <4.8
     , containers
+    , directory
+    , filepath
     , hslogger
     , hurtle
     , stm
+    , tasty
+    , tasty-golden
   ghc-options:      -Wall
   hs-source-dirs:   test-src
   default-language: Haskell2010

@@ -1,16 +1,23 @@
 {-# LANGUAGE GADTs        #-}
+{-# LANGUAGE RankNTypes   #-}
 {-# LANGUAGE TypeFamilies #-}
 
 module Main where
 
 import           Control.Applicative
 import qualified Control.Concurrent.STM    as STM
+import           Control.Exception         (finally)
 import           Control.Monad             (join)
 import           Data.List                 (sortBy)
 import qualified Data.Map                  as M
-import           System.IO                 (stderr)
-import qualified System.Log.Handler.Simple as Log
+import           System.Directory          (createDirectoryIfMissing)
+import           System.FilePath           ((</>))
+import           System.IO                 (Handle, IOMode(..), withFile)
+import qualified System.Log.Handler        as LogH
+import qualified System.Log.Handler.Simple as LogH
 import qualified System.Log.Logger         as Log
+import qualified Test.Tasty                as Tasty
+import qualified Test.Tasty.Golden         as Tasty
 
 import           System.Hurtle
 
@@ -59,12 +66,16 @@ instance Connection TestConn where
             Left  (WrapOrdF cid, x) -> return $ Ok cid x
             Right (WrapOrdF cid, x) -> return $ Ok cid (show x)
 
-setupLogging :: IO ()
-setupLogging = do
-    handler <- Log.verboseStreamHandler stderr Log.DEBUG
+withLogging :: FilePath -> IO a -> IO a
+withLogging path m = withFile ("test/output/" </> path) WriteMode $ \h -> do
+    fileH <- LogH.streamHandler h Log.DEBUG
     let setLevel   = Log.setLevel Log.DEBUG
-        setHandler = Log.setHandlers [handler]
+        setHandler = Log.setHandlers [fileH]
+        noHandlers = Log.setHandlers ([] :: [LogH.GenericHandler Handle])
     Log.updateGlobalLogger Log.rootLoggerName (setLevel . setHandler)
+    finally m $ do
+        LogH.close fileH
+        Log.updateGlobalLogger Log.rootLoggerName noHandlers
 
 logHandler :: Show i => Log (Error TestConn) i -> IO ()
 logHandler msg = case logLevel msg of
@@ -77,8 +88,9 @@ logHandler msg = case logLevel msg of
     showE (ErrTest x) = "ERR: " ++ x
 
 main :: IO ()
-main =
-    mainNew
+main = do
+    createDirectoryIfMissing True "test/output"
+    Tasty.defaultMain goldenTests
 
 echoIntNew :: Int -> Hurtle s TestConn Int
 echoIntNew x = request (ReqInt x)
@@ -86,19 +98,59 @@ echoIntNew x = request (ReqInt x)
 showIntNew :: Int -> Hurtle s TestConn String
 showIntNew x = request (ReqStr x)
 
-mainNew :: IO ()
-mainNew = do
-    let test 0 = fork $ pure <$> request (ReqInt 0)
-        test 1 = fork $ pure <$> request (ReqInt 1)
-        test n = do
-            xm <- fork $ request (ReqInt n)
-            xsm <- test (n-1)
-            ysm <- test (n-2)
-            return $ do
-                x  <- xm
-                xs <- xsm
-                ys <- ysm
-                return $ sortBy (flip compare) (x : xs ++ ys)
+type Test s
+    =  Hurtle s TestConn Int
+    -> Hurtle s TestConn [Int]
+    -> Hurtle s TestConn [Int]
+    -> Hurtle s TestConn (Hurtle s TestConn [Int])
 
-    setupLogging
-    runHurtle InitTest logHandler (join (test 5)) >>= print
+goldenTests :: Tasty.TestTree
+goldenTests = Tasty.testGroup "Golden"
+    [ runGolden "forkAll" (forkAll 5)
+    , runGolden "joinXs"  (joinXs  5)
+    , runGolden "joinYs"  (joinYs  5)
+    ]
+
+runGolden :: String -> (forall s. Hurtle s TestConn [Int]) -> Tasty.TestTree
+runGolden nm m =
+    Tasty.goldenVsFile nm golden output . withLogging nm $ do
+        x <- runHurtle InitTest logHandler m
+        Log.infoM "main" $ "RESULT: " ++ show x
+  where
+    golden = "test/golden" </> nm
+    output = "test/output" </> nm
+
+makeGolden :: Test s -> Int -> Hurtle s TestConn [Int]
+makeGolden test = join . go
+  where
+    go 0 = fork $ pure <$> request (ReqInt 0)
+    go 1 = fork $ pure <$> request (ReqInt 1)
+    go n = do
+        xm  <- fork $ request (ReqInt n)
+        xsm <- go (n-1)
+        ysm <- go (n-2)
+        fmap (sortBy (flip compare)) <$> test xm xsm ysm
+
+forkAll :: Int -> Hurtle s TestConn [Int]
+forkAll = makeGolden $ \xm xsm ysm ->
+    return $ do
+        x  <- xm
+        xs <- xsm
+        ys <- ysm
+        return $ x : xs ++ ys
+
+joinXs :: Int -> Hurtle s TestConn [Int]
+joinXs = makeGolden $ \xm xsm ysm -> do
+    xs <- xsm
+    return $ do
+        x  <- xm
+        ys <- ysm
+        return $ x : xs ++ ys
+
+joinYs :: Int -> Hurtle s TestConn [Int]
+joinYs = makeGolden $ \xm xsm ysm -> do
+    ys <- ysm
+    return $ do
+        x  <- xm
+        xs <- xsm
+        return $ x : xs ++ ys

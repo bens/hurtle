@@ -1,0 +1,94 @@
+Initialising
+0 forked 1
+1 -->
+0 forked 2
+2 -->
+0 forked 3
+3 -->
+0 forked 4
+4 -->
+0 forked 5
+5 -->
+0 forked 6
+6 -->
+0 waiting for 6
+1 <--
+1 finished
+2 <--
+2 finished
+3 <--
+3 finished
+4 <--
+4 finished
+5 <--
+5 finished
+6 <--
+6 finished
+0 continuing with result from 6
+0 forked 7
+7 -->
+0 waiting for 7
+7 <--
+7 finished
+0 continuing with result from 7
+0 forked 8
+8 -->
+0 forked 9
+9 -->
+0 forked 10
+10 -->
+0 waiting for 10
+8 <--
+8 finished
+9 <--
+9 finished
+10 <--
+10 finished
+0 continuing with result from 10
+0 waiting for 8
+0 continuing with result from 8
+0 waiting for 9
+0 continuing with result from 9
+0 forked 11
+11 -->
+0 forked 12
+12 -->
+0 forked 13
+13 -->
+0 forked 14
+14 -->
+0 waiting for 14
+11 <--
+11 finished
+12 <--
+12 finished
+13 <--
+13 finished
+14 <--
+14 finished
+0 continuing with result from 14
+0 forked 15
+15 -->
+0 waiting for 15
+15 <--
+15 finished
+0 continuing with result from 15
+0 waiting for 11
+0 continuing with result from 11
+0 waiting for 12
+0 continuing with result from 12
+0 waiting for 13
+0 continuing with result from 13
+0 waiting for 1
+0 continuing with result from 1
+0 waiting for 2
+0 continuing with result from 2
+0 waiting for 3
+0 continuing with result from 3
+0 waiting for 4
+0 continuing with result from 4
+0 waiting for 5
+0 continuing with result from 5
+0 finished
+Finished
+RESULT: Right [5,4,3,3,2,2,2,1,1,1,1,1,0,0,0]
