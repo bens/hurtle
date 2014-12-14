@@ -25,6 +25,7 @@ library
       base >=4.6 && <4.8
     , abstract-par
     , containers
+    , foldl
     , monad-resumption >= 0.1.1.4
     , transformers
   ghc-options:      -Wall
@@ -40,6 +41,7 @@ test-suite hurtle-test
     , containers
     , directory
     , filepath
+    , foldl
     , hslogger
     , hurtle
     , stm

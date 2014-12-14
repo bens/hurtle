@@ -6,10 +6,12 @@
 module System.Hurtle.Types where
 
 import           Control.Applicative
+import           Control.Foldl
 import           Control.Monad            ((>=>), ap)
 import qualified Control.Monad.Par.Class  as Par
 
 import           System.Hurtle.Common
+import           System.Hurtle.Log        (Log)
 import qualified System.Hurtle.Log        as Log
 import qualified System.Hurtle.TypedStore as TS
 
@@ -35,9 +37,10 @@ data Process s c a
     | ProcessFailed (Error c)
     | ProcessRunning [BlockedProcess s c a]
 
-data HurtleState s c = HState
+data HurtleState s c l = HState
     { _stNextId   :: Log.Id
     , _stState    :: c (SentRequest s c)
+    , _stLogState :: FoldM (M c) (Log (Error c)) l
     , _stForks    :: TS.TypedStore s TS.Mono (Process s c)
     }
 

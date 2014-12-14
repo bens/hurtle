@@ -7,6 +7,7 @@ module Main where
 import           Control.Applicative
 import qualified Control.Concurrent.STM    as STM
 import           Control.Exception         (finally)
+import           Control.Foldl
 import           Control.Monad             (join)
 import           Data.List                 (sortBy)
 import qualified Data.Map                  as M
@@ -77,13 +78,14 @@ withLogging path m = withFile ("test/output/" </> path) WriteMode $ \h -> do
         LogH.close fileH
         Log.updateGlobalLogger Log.rootLoggerName noHandlers
 
-logHandler :: Log (Error TestConn) -> IO ()
-logHandler msg = case logLevel msg of
-    Debug   -> Log.debugM   component (logDescription showE msg)
-    Info    -> Log.infoM    component (logDescription showE msg)
-    Warning -> Log.warningM component (logDescription showE msg)
-    Error   -> Log.errorM   component (logDescription showE msg)
+logHandler :: FoldM IO (Log (Error TestConn)) ()
+logHandler = FoldM (const f) (return ()) return
   where
+    f msg = case logLevel msg of
+        Debug   -> Log.debugM   component (logDescription showE msg)
+        Info    -> Log.infoM    component (logDescription showE msg)
+        Warning -> Log.warningM component (logDescription showE msg)
+        Error   -> Log.errorM   component (logDescription showE msg)
     component = "Hurtle"
     showE (ErrTest x) = "ERR: " ++ x
 
@@ -115,7 +117,7 @@ runGolden :: String -> (forall s. Hurtle s TestConn [Int]) -> Tasty.TestTree
 runGolden nm m =
     Tasty.goldenVsFile nm golden output . withLogging nm $ do
         x <- runHurtle InitTest logHandler m
-        Log.infoM "main" $ "RESULT: " ++ show x
+        Log.infoM "main" $ "RESULT: " ++ show (fmap fst x)
   where
     golden = "test/golden" </> nm
     output = "test/output" </> nm
