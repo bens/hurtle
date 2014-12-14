@@ -10,10 +10,11 @@ import           Control.Monad            ((>=>), ap)
 import qualified Control.Monad.Par.Class  as Par
 
 import           System.Hurtle.Common
+import qualified System.Hurtle.Log        as Log
 import qualified System.Hurtle.TypedStore as TS
 
 data ForkId s c a
-    = ForkId Int (TS.Id s (Process s c a))
+    = ForkId Log.Id (TS.Id s (Process s c a))
 instance EqF (ForkId s c) where
     ForkId i _ `eqF` ForkId j _ = i == j
 instance OrdF (ForkId s c) where
@@ -35,7 +36,7 @@ data Process s c a
     | ProcessRunning [BlockedProcess s c a]
 
 data HurtleState s c = HState
-    { _stNextId   :: Int
+    { _stNextId   :: Log.Id
     , _stState    :: c (SentRequest s c)
     , _stForks    :: TS.TypedStore s TS.Mono (Process s c)
     }

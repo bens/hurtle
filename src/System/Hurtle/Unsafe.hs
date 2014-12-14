@@ -8,6 +8,7 @@ import           Control.Applicative
 import           Unsafe.Coerce             (unsafeCoerce)
 
 import           System.Hurtle.Common
+import qualified System.Hurtle.Log         as Log
 import qualified System.Hurtle.TypedStore  as TS
 import           System.Hurtle.Types
 
@@ -21,5 +22,6 @@ withHurtleState :: (Connection c, Applicative (M c), Monad (M c))
 withHurtleState args hurtle k =
     TS.typedStore' $ \forks -> do
         c <- initialise args
-        res <- k (HState 0 c (unsafeCoerce forks)) (unsafeCoerce hurtle)
+        res <- k (HState Log.firstId c (unsafeCoerce forks))
+                 (unsafeCoerce hurtle)
         res <$ finalise c

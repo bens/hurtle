@@ -77,7 +77,7 @@ withLogging path m = withFile ("test/output/" </> path) WriteMode $ \h -> do
         LogH.close fileH
         Log.updateGlobalLogger Log.rootLoggerName noHandlers
 
-logHandler :: Show i => Log (Error TestConn) i -> IO ()
+logHandler :: Log (Error TestConn) -> IO ()
 logHandler msg = case logLevel msg of
     Debug   -> Log.debugM   component (logDescription showE msg)
     Info    -> Log.infoM    component (logDescription showE msg)

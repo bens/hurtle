@@ -85,21 +85,19 @@ forkProcess :: (Functor m, Monad m)
 forkProcess = do
     st <- get
     let (fid, forks') = TS.insert (ProcessRunning []) (_stForks st)
-    put st{ _stNextId = _stNextId st + 1, _stForks = forks' }
+    put st{ _stNextId = nextId (_stNextId st), _stForks = forks' }
     return (ForkId (_stNextId st) fid)
 
 data Step s c where
     Step :: ForkId s c a -> Hurtle s c a -> Step s c
 
 runHurtle :: (Connection c, Applicative (M c), Monad (M c))
-          => InitArgs c                                      -- ^ Initialisation
-          -> (forall i. Show i => Log (Error c) i -> M c ()) -- ^ Log handler
-          -> (forall s. Hurtle s c a)                        -- ^ Action to run
+          => InitArgs c                      -- ^ Initialisation
+          -> (Log (Error c) -> M c ())       -- ^ Log handler
+          -> (forall s. Hurtle s c a)        -- ^ Action to run
           -> M c (Either (Error c) a)
-runHurtle args logIt' h' = withHurtleState args h' $ \st0 h -> do
-    let logIt x = logIt' x where _ = [Sending (0 :: Int), x]
-
-        unlessDone (ForkId _ fid) k = do
+runHurtle args logIt h' = withHurtleState args h' $ \st0 h -> do
+    let unlessDone (ForkId _ fid) k = do
             st <- lift get
             case fid TS.! _stForks st of
                 ProcessDone x -> return (Right x)
