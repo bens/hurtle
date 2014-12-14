@@ -69,7 +69,7 @@ instance Par.ParFuture (Hurtle s c) (Hurtle s c) where
 
 -- | Fork a new process and return an action that will wait for the result.
 fork :: Hurtle s c a -> Hurtle s c (Hurtle s c a)
-fork h = Fork h $ \fid -> Block fid (return . return)
+fork h = Fork h $ \fid -> return $ Block fid return
 
 -- | Make a request and wait for the response.
 request :: Request c a -> Hurtle s c a
