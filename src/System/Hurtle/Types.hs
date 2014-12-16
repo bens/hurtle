@@ -1,12 +1,12 @@
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
+{-# LANGUAGE RankNTypes                 #-}
 {-# LANGUAGE Safe                       #-}
 
 module System.Hurtle.Types where
 
 import           Control.Applicative
-import           Control.Foldl
 import           Control.Monad            ((>=>), ap)
 import qualified Control.Monad.Par.Class  as Par
 
@@ -37,10 +37,22 @@ data Process s c a
     | ProcessFailed (Error c)
     | ProcessRunning [BlockedProcess s c a]
 
+-- | The foldl package has quite a few dependencies which we would rather avoid,
+-- so by defining 'LogFold' and the 'unLogFold' function we can be compatible
+-- with foldl but not depend on it.  See test-src/Main.hs for an example use.
+data LogFold c l where
+    LogFold :: (x -> Log (Error c) -> M c x) -> M c x -> (x -> M c l)
+            -> LogFold c l
+
+unLogFold :: (LogFold c l -> r)
+          -> (forall x. (x -> Log (Error c) -> M c x) -> M c x -> (x -> M c l)
+                     -> r)
+unLogFold g f m k = g (LogFold f m k)
+
 data HurtleState s c l = HState
     { _stNextId   :: Log.Id
     , _stState    :: c (SentRequest s c)
-    , _stLogState :: FoldM (M c) (Log (Error c)) l
+    , _stLogState :: LogFold c l
     , _stForks    :: TS.TypedStore s TS.Mono (Process s c)
     }
 

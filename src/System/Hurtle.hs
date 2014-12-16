@@ -63,11 +63,11 @@ module System.Hurtle
   , EqF(..), WrapEqF(..), BlindEqF(..)
   , OrdF(..), WrapOrdF(..), BlindOrdF(..)
     -- * Logging
+  , LogFold(..), unLogFold
   , module System.Hurtle.Log
   ) where
 
 import           Control.Applicative
-import           Control.Foldl
 import           Control.Monad                     (forM_)
 import           Control.Monad.Fix                 (fix)
 import           Control.Monad.Resumption          (runResT)
@@ -93,17 +93,17 @@ data Step s c where
     Step :: ForkId s c a -> Hurtle s c a -> Step s c
 
 runHurtle :: (Connection c, Applicative (M c), Monad (M c))
-          => InitArgs c                      -- ^ Initialisation
-          -> FoldM (M c) (Log (Error c)) l   -- ^ Log handler
+          => LogFold c l                     -- ^ Log handler
+          -> InitArgs c                      -- ^ Initialisation
           -> (forall s. Hurtle s c a)        -- ^ Action to run
           -> M c (Either (Error c) (a, l))
-runHurtle args logFold h' = withHurtleState args logFold h' $ \st0 h -> do
+runHurtle logFold args h' = withHurtleState args logFold h' $ \st0 h -> do
     let logIt x = do
             st <- get
             case _stLogState st of
-                FoldM f sm k -> do
+                LogFold f sm k -> do
                     s <- lift sm
-                    put st{ _stLogState = FoldM f (f s x) k }
+                    put st{ _stLogState = LogFold f (f s x) k }
         unlessDone (ForkId _ fid) k = do
             st <- lift get
             case fid TS.! _stForks st of
@@ -181,6 +181,6 @@ runHurtle args logFold h' = withHurtleState args logFold h' $ \st0 h -> do
         (Left e, _) -> return (Left e)
         (Right (Left e), _) -> return (Left e)
         (Right (Right x), st) -> case _stLogState st of
-            FoldM _ m k -> do
+            LogFold _ m k -> do
                 l <- m >>= k
                 return (Right (x, l))

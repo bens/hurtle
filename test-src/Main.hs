@@ -116,7 +116,8 @@ goldenTests = Tasty.testGroup "Golden"
 runGolden :: String -> (forall s. Hurtle s TestConn [Int]) -> Tasty.TestTree
 runGolden nm m =
     Tasty.goldenVsFile nm golden output . withLogging nm $ do
-        x <- runHurtle InitTest logHandler m
+        let hurtle = impurely (unLogFold runHurtle) logHandler InitTest
+        x <- hurtle m
         Log.infoM "main" $ "RESULT: " ++ show (fmap fst x)
   where
     golden = "test/golden" </> nm

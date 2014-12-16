@@ -5,11 +5,9 @@
 module System.Hurtle.Unsafe where
 
 import           Control.Applicative
-import           Control.Foldl
 import           Unsafe.Coerce             (unsafeCoerce)
 
 import           System.Hurtle.Common
-import           System.Hurtle.Log         (Log)
 import qualified System.Hurtle.Log         as Log
 import qualified System.Hurtle.TypedStore  as TS
 import           System.Hurtle.Types
@@ -18,7 +16,7 @@ import           System.Hurtle.Types
 -- match up.
 withHurtleState :: (Connection c, Applicative (M c), Monad (M c))
                 => InitArgs c
-                -> FoldM (M c) (Log (Error c)) l
+                -> LogFold c l
                 -> (forall s. Hurtle s c a)
                 -> (forall s. HurtleState s c l -> Hurtle s c a -> M c b)
                 -> M c b
