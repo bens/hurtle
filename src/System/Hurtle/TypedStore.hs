@@ -7,8 +7,7 @@
 -- | A container for keeping values of various types together.
 module System.Hurtle.TypedStore
   ( Id(), Mode(..), TypedStore()
-  , typedStore, typedStore'
-  , insert, lookup, (!), update, delete
+  , typedStore, insert, lookup, (!), update, delete
   ) where
 
 import           Data.IntMap          (IntMap)
@@ -50,12 +49,5 @@ delete (Id i) (TS n st) = TS n (IM.delete i st)
 -- use the '!' operator and have to deal with 'Maybe's from 'lookup'.
 --
 -- Uses an existential phantom type for safety.
-typedStore :: (forall s. TypedStore s NonMono f -> a) -> a
+typedStore :: (forall s. TypedStore s mode f -> a) -> a
 typedStore f = f (TS 0 IM.empty)
-
--- | Create a 'Mono'tonic store, that is 'delete's are not allowed but you can use
--- the '!' operator and not deal with 'Maybe's.
---
--- Uses an existential phantom type for safety.
-typedStore' :: (forall s. TypedStore s Mono f -> a) -> a
-typedStore' f = f (TS 0 IM.empty)

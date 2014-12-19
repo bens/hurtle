@@ -21,7 +21,7 @@ withHurtleState :: (Connection c, Applicative (M c), Monad (M c))
                 -> (forall s. HurtleState s c l -> Hurtle s c a -> M c b)
                 -> M c b
 withHurtleState args logFold hurtle k =
-    TS.typedStore' $ \forks -> do
+    TS.typedStore $ \forks -> do
         c <- initialise args
         res <- k (HState Log.firstId c logFold (unsafeCoerce forks))
                  (unsafeCoerce hurtle)
