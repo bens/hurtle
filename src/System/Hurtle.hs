@@ -75,7 +75,6 @@ import           Control.Monad.Resumption.Reactive ((<~>), signal)
 import           Control.Monad.Trans.Class         (lift)
 import           Control.Monad.Trans.State
 
-import           System.Hurtle.Common
 import           System.Hurtle.Log
 import           System.Hurtle.Types
 import qualified System.Hurtle.TypedStore  as TS

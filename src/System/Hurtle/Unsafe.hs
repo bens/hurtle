@@ -7,7 +7,6 @@ module System.Hurtle.Unsafe where
 import           Control.Applicative
 import           Unsafe.Coerce             (unsafeCoerce)
 
-import           System.Hurtle.Common
 import qualified System.Hurtle.Log         as Log
 import qualified System.Hurtle.TypedStore  as TS
 import           System.Hurtle.Types

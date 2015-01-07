@@ -17,7 +17,7 @@ import           Unsafe.Coerce        (unsafeCoerce)
 
 import           Prelude              hiding (lookup)
 
-import           System.Hurtle.Common (Box(..))
+data Box f where Box :: f a -> Box f
 
 data Mode
     = Mono     -- ^ Monotonic (no deletes, only inserts and updates)

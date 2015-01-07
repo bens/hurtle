@@ -16,7 +16,6 @@ library
   exposed-modules:
       System.Hurtle
   other-modules:
-      System.Hurtle.Common
       System.Hurtle.Log
       System.Hurtle.TypedStore
       System.Hurtle.Types
